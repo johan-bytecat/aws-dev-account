@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "KeyPairName",
+    "ParameterValue": "bytecatdev1"
+  },
+  {
+    "ParameterKey": "FoundationStackName",
+    "ParameterValue": "devcloud-foundation"
+  },
+  {
+    "ParameterKey": "PublicHostedZoneId",
+    "ParameterValue": "Z01350882HWVKQIM61CH3"
+  },
+  {
+    "ParameterKey": "DomainName",
+    "ParameterValue": "devcloud.bytecat.co.za"
+  }
+]

@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Development Environment Phase 2 - VPN/NAT Gateway Instance'
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access'
+  
+  FoundationStackName:
+    Type: String
+    Default: 'devcloud-foundation'
+    Description: 'Name of the foundation stack that contains VPC and S3 resources'
+    
+  PublicHostedZoneId:
+    Type: String
+    Description: 'ID of the existing public hosted zone (managed by separate team)'
+    
+  DomainName:
+    Type: String
+    Default: 'devcloud.bytecat.co.za'
+    Description: 'Domain name for the hosted zone'
+  
+  VPNNATPrivateIP:
+    Type: String
+    Default: '172.16.1.100'
+    Description: 'Fixed private IP address for VPN/NAT Gateway instance'
+    AllowedPattern: '^172\.16\.1\.[0-9]{1,3}$'
+    ConstraintDescription: 'Must be a valid IP address in the public subnet range (172.16.1.0/24)'
+
+Resources:
+  # =============================================================================
+  # NETWORKING ROUTES - Routes that depend on NAT instance
+  # =============================================================================
+
+  # Route for private subnet traffic - directs internet traffic through NAT instance
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: 
+        Fn::ImportValue: !Sub '${FoundationStackName}-Private-Route-Table-ID'
+      DestinationCidrBlock: '0.0.0.0/0'
+      InstanceId: !Ref NATGatewayInstance
+
+  # =============================================================================
+  # VPN/NAT GATEWAY INSTANCE
+  # =============================================================================
+
+  # VPN/NAT Gateway instance - provides VPN access and NAT services with fixed IP
+  NATGatewayInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-042ad6e600ef0750b  # Amazon Linux 2023 AMI 2023.8.20250721.2 x86_64
+      KeyName: !Ref KeyPairName
+      SubnetId: 
+        Fn::ImportValue: !Sub '${FoundationStackName}-Public-Subnet-ID'
+      PrivateIpAddress: !Ref VPNNATPrivateIP  # Fixed IP for predictable networking
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub '${FoundationStackName}-VPN-NAT-SG-ID'
+      IamInstanceProfile: !Select [1, !Split ['/', 
+        Fn::ImportValue: !Sub '${FoundationStackName}-VPN-NAT-Instance-Profile-ARN']]
+      SourceDestCheck: false
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            
+            # Set up logging for userdata execution
+            exec > >(tee /var/log/user-data.log) 2>&1
+            
+            echo "=== DevCloud VPN/NAT Instance Initialization Started ==="
+            echo "Timestamp: $(date)"
+
+            # Create directories for scripts and parameters
+            mkdir -p /opt/devcloud/scripts
+            mkdir -p /opt/devcloud/config
+
+            # Save initialization parameters to file for future use
+            cat > /opt/devcloud/config/init-parameters.env << EOF
+            PRIVATE_HOSTED_ZONE_ID=${PrivateHostedZone}
+            PUBLIC_HOSTED_ZONE_ID=${PublicHostedZone}
+            DOMAIN_NAME=${DomainName}
+            SCRIPTS_BUCKET=${ScriptsBucket}
+            EOF
+
+            
+            # Get instance metadata using IMDSv2
+            TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" -s)
+            INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/instance-id)
+            AMI_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/ami-id)
+            INSTANCE_TYPE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/instance-type)
+            
+            echo "Instance ID: $INSTANCE_ID"
+            echo "AMI ID: $AMI_ID"
+            echo "Instance Type: $INSTANCE_TYPE"
+            echo "============================================================"
+            
+            # Update system packages
+            echo "Updating system packages..."
+            yum update -y
+            
+            # Download and execute initialization script from S3
+            echo "Downloading initialization script from S3..."
+            echo "Scripts Bucket: ${ScriptsBucket}"
+            echo "Private Hosted Zone: ${PrivateHostedZone}"
+            echo "Public Hosted Zone: ${PublicHostedZone}"
+            echo "Domain Name: ${DomainName}"
+            
+
+            
+            if aws s3 cp s3://${ScriptsBucket}/init/vpn-nat-init.sh /opt/devcloud/scripts/vpn-nat-init.sh; then
+                echo "✓ Successfully downloaded vpn-nat-init.sh"
+                chmod +x /opt/devcloud/scripts/vpn-nat-init.sh
+                
+                echo "Executing initialization script..."
+                if /opt/devcloud/scripts/vpn-nat-init.sh; then
+                    echo "✓ VPN/NAT initialization completed successfully"
+                else
+                    echo "✗ VPN/NAT initialization failed with exit code $?"
+                    exit 1
+                fi
+            else
+                echo "✗ Failed to download vpn-nat-init.sh from S3"
+                exit 1
+            fi
+            
+            echo "=== DevCloud VPN/NAT Instance Initialization Completed ==="
+            echo "Timestamp: $(date)"
+            echo "Parameters saved to: /opt/devcloud/config/init-parameters.env"
+            echo "Scripts stored in: /opt/devcloud/scripts/"
+            echo "Log file: /var/log/user-data.log"
+            echo "============================================================="
+          - ScriptsBucket: 
+              Fn::ImportValue: !Sub '${FoundationStackName}-Scripts-Bucket-Name'
+            PrivateHostedZone:
+              Fn::ImportValue: !Sub '${FoundationStackName}-Private-Hosted-Zone-ID'
+            PublicHostedZone: !Ref PublicHostedZoneId
+            DomainName: !Ref DomainName
+      Tags:
+        - Key: Name
+          Value: DevCloud-VPN-NAT-Gateway
+        - Key: UpdateTrigger
+          Value: "2025-08-11-17:00"
+
+  # =============================================================================
+  # IAM POLICY ATTACHMENTS - Policies for VPN/NAT instance management
+  # =============================================================================
+
+  # Policy for managing VPN/NAT instance - allows start/stop operations
+  VPNNATInstanceManagementPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: DevCloud-VPN-NAT-Instance-Management
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ec2:StartInstances
+              - ec2:StopInstances
+              - ec2:DescribeInstances
+              - ec2:DescribeInstanceStatus
+            Resource:
+              - !Sub 'arn:aws:ec2:af-south-1:${AWS::AccountId}:instance/${NATGatewayInstance}'
+      Roles:
+        - DevCloud-Instance-Management-Role
+
+Outputs:
+  VPNNATInstanceId:
+    Description: VPN/NAT Gateway Instance ID
+    Value: !Ref NATGatewayInstance
+    Export:
+      Name: !Sub '${AWS::StackName}-VPN-NAT-Instance-ID'
+
+  VPNNATPublicIP:
+    Description: VPN/NAT Gateway Public IP
+    Value: !GetAtt NATGatewayInstance.PublicIp
+    Export:
+      Name: !Sub '${AWS::StackName}-VPN-NAT-Public-IP'
+
+  VPNNATPrivateIP:
+    Description: VPN/NAT Gateway Private IP (Fixed)
+    Value: !GetAtt NATGatewayInstance.PrivateIp
+    Export:
+      Name: !Sub '${AWS::StackName}-VPN-NAT-Private-IP'
+  
+  # Route Configuration for Phase 3
+  PrivateRouteId:
+    Description: 'Route ID for private subnet - needed for Phase 3 verification'
+    Value: !Ref PrivateRoute
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-Route-ID'
+  
+  # Network Configuration Documentation
+  VPNNetworkConfiguration:
+    Description: 'VPN/NAT Network Configuration - WireGuard VPN: 10.0.0.0/24'
+    Value: !Sub 
+      - 'VPN/NAT Gateway: ${VPNNATPrivateIP} | WireGuard Server: 10.0.0.1/24 | Client Range: 10.0.0.2-254'
+      - VPNNATPrivateIP: !Ref VPNNATPrivateIP
+    Export:
+      Name: !Sub '${AWS::StackName}-VPN-Network-Configuration'

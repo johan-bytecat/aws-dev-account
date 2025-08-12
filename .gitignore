@@ -1,0 +1,16 @@
+# Ignore private key files
+*.pem
+*.ppk
+*.key
+*.crt
+*.cer
+*.der
+*.gpg
+*.asc
+*.enc
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.srl
+*.csr

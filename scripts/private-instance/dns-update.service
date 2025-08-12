@@ -1,0 +1,15 @@
+[Unit]
+Description=Update Private Instance DNS Record on Boot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/update-dns-on-boot.sh
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

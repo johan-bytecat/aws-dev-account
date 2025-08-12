@@ -1,0 +1,533 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Development Environment Foundation - S3, VPC, IAM (Phase 1)'
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: '172.16.0.0/16'
+    Description: 'CIDR block for the VPC'
+  
+  PublicSubnetCidr:
+    Type: String
+    Default: '172.16.1.0/24'
+    Description: 'CIDR block for public subnet'
+  
+  PrivateSubnetCidr:
+    Type: String
+    Default: '172.16.2.0/24'
+    Description: 'CIDR block for private subnet'
+  
+  DomainName:
+    Type: String
+    Default: 'devcloud.bytecat.co.za'
+    Description: 'Domain name for the hosted zone'
+  
+  PrivateHostedZoneId:
+    Type: String
+    Description: 'ID of the existing private hosted zone (managed by separate team)'
+    Default: ''
+    
+  PublicHostedZoneId:
+    Type: String
+    Description: 'ID of the existing public hosted zone (managed by separate team)'
+
+Conditions:
+  CreatePrivateHostedZone: !Equals [!Ref PrivateHostedZoneId, '']
+
+Resources:
+  # =============================================================================
+  # VPC AND NETWORKING COMPONENTS
+  # =============================================================================
+  
+  # Main Virtual Private Cloud - isolated network environment for all resources
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: DevCloud-VPC
+
+  # Public subnet - houses VPN/NAT gateway with internet access
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetCidr
+      AvailabilityZone: af-south-1a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: DevCloud-Public-Subnet
+
+  # Private subnet - houses private instances with no direct internet access
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetCidr
+      AvailabilityZone: af-south-1a
+      Tags:
+        - Key: Name
+          Value: DevCloud-Private-Subnet
+
+  # Internet Gateway - provides internet access to public subnet
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: DevCloud-IGW
+
+  # Attaches Internet Gateway to VPC
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Route table for public subnet - directs traffic to internet gateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: DevCloud-Public-RT
+
+  # Route in public table - sends all traffic (0.0.0.0/0) to internet gateway
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+
+  # Associates public subnet with public route table
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Route table for private subnet - will route through NAT instance (created in compute stack)
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: DevCloud-Private-RT
+
+  # Associates private subnet with private route table
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  # =============================================================================
+  # SECURITY GROUPS - Network access control rules
+  # =============================================================================
+
+  # Security group for VPN/NAT Gateway - allows VPN traffic and NAT for private instances
+  VPNNATSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for VPN/NAT Gateway instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: udp
+          FromPort: 51820
+          ToPort: 51820
+          CidrIp: '0.0.0.0/0'
+          Description: 'WireGuard VPN'
+        - IpProtocol: -1
+          CidrIp: !Ref PrivateSubnetCidr
+          Description: 'All traffic from private subnet for NAT'
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: '0.0.0.0/0'
+          Description: 'All outbound traffic'
+      Tags:
+        - Key: Name
+          Value: DevCloud-VPN-NAT-SG
+
+  # Security group for private instances - allows access only from VPN/NAT and within VPC
+  PrivateInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for private instances
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref VPNNATSecurityGroup
+          Description: 'SSH from VPN/NAT'
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref VpcCidr
+          Description: 'HTTP from VPC'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCidr
+          Description: 'HTTPS from VPC'
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          CidrIp: !Ref PrivateSubnetCidr
+          Description: 'NFS for EFS'
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: '0.0.0.0/0'
+          Description: 'All outbound traffic'
+      Tags:
+        - Key: Name
+          Value: DevCloud-Private-SG
+
+  # Security group for EFS file system - allows NFS access from private subnet
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EFS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          CidrIp: !Ref PrivateSubnetCidr
+          Description: 'NFS from private subnet'
+      Tags:
+        - Key: Name
+          Value: DevCloud-EFS-SG
+
+  # =============================================================================
+  # IAM ROLES AND POLICIES - Identity and access management
+  # =============================================================================
+
+  # IAM role for VPN/NAT instance - allows S3 access and DNS management for both zones
+  VPNNATRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DevCloud-VPN-NAT-Role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: DevCloud-Scripts-Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub '${ScriptsBucket.Arn}/*'
+                  - !GetAtt ScriptsBucket.Arn
+        - PolicyName: DevCloud-Route53-Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                  - route53:GetHostedZone
+                  - route53:ListResourceRecordSets
+                Resource: 
+                  - !Sub 
+                    - 'arn:aws:route53:::hostedzone/${PrivateZoneId}'
+                    - PrivateZoneId: !If [CreatePrivateHostedZone, !Ref PrivateHostedZone, !Ref PrivateHostedZoneId]
+                  - !Sub 'arn:aws:route53:::hostedzone/${PublicHostedZoneId}'
+              - Effect: Allow
+                Action:
+                  - route53:ListHostedZones
+                Resource: '*'
+
+  # IAM role for private instances - allows S3 access and private DNS management only
+  PrivateInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DevCloud-Private-Instance-Role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: DevCloud-Full-S3-Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub '${ScriptsBucket.Arn}/*'
+                  - !GetAtt ScriptsBucket.Arn
+                  - !Sub '${DataBucket.Arn}/*'
+                  - !GetAtt DataBucket.Arn
+        - PolicyName: DevCloud-Route53-Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                  - route53:GetHostedZone
+                  - route53:ListResourceRecordSets
+                Resource: !Sub 
+                  - 'arn:aws:route53:::hostedzone/${PrivateZoneId}'
+                  - PrivateZoneId: !If [CreatePrivateHostedZone, !Ref PrivateHostedZone, !Ref PrivateHostedZoneId]
+              - Effect: Allow
+                Action:
+                  - route53:ListHostedZones
+                Resource: '*'
+
+  # Instance profile for VPN/NAT - allows EC2 to assume VPN/NAT role
+  VPNNATInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref VPNNATRole
+
+  # Instance profile for private instances - allows EC2 to assume private instance role
+  PrivateInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref PrivateInstanceRole
+
+  # IAM role for instance management operations (start/stop instances)
+  InstanceManagementRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DevCloud-Instance-Management-Role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                'aws:RequestedRegion': 'af-south-1'
+
+  # =============================================================================
+  # S3 STORAGE - Object storage buckets
+  # =============================================================================
+
+  # S3 bucket for storing initialization scripts and configuration files
+  ScriptsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'devcloud-scripts-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Name
+          Value: DevCloud-Scripts-Bucket
+
+  # S3 bucket for application data and user files
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'devcloud-data-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Name
+          Value: DevCloud-Data-Bucket
+
+  # =============================================================================
+  # EFS FILE SYSTEM - Shared network storage
+  # =============================================================================
+
+  # Elastic File System - provides shared persistent storage for private instances
+  EFSFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags:
+        - Key: Name
+          Value: DevCloud-EFS
+
+  # EFS mount target - allows private subnet to access the file system
+  EFSMountTarget:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Ref PrivateSubnet
+      SecurityGroups:
+        - !Ref EFSSecurityGroup
+
+  # =============================================================================
+  # DNS MANAGEMENT - Private hosted zone (VPC-dependent)
+  # =============================================================================
+
+  # Private hosted zone - for internal VPC DNS resolution
+  # Created only if PrivateHostedZoneId parameter is empty
+  PrivateHostedZone:
+    Type: AWS::Route53::HostedZone
+    Condition: CreatePrivateHostedZone
+    Properties:
+      Name: !Ref DomainName
+      VPCs:
+        - VPCId: !Ref VPC
+          VPCRegion: af-south-1
+      HostedZoneConfig:
+        Comment: 'DevCloud private hosted zone for internal VPC DNS resolution'
+      HostedZoneTags:
+        - Key: Name
+          Value: DevCloud-Private-HostedZone
+        - Key: Environment
+          Value: Development
+        - Key: ManagedBy
+          Value: Foundation-Stack
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPC-ID'
+
+  PublicSubnetId:
+    Description: Public Subnet ID
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub '${AWS::StackName}-Public-Subnet-ID'
+
+  PrivateSubnetId:
+    Description: Private Subnet ID
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-Subnet-ID'
+
+  VPNNATSecurityGroupId:
+    Description: VPN/NAT Security Group ID
+    Value: !Ref VPNNATSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-VPN-NAT-SG-ID'
+
+  PrivateInstanceSecurityGroupId:
+    Description: Private Instance Security Group ID
+    Value: !Ref PrivateInstanceSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-SG-ID'
+
+  VPNNATInstanceProfileArn:
+    Description: VPN/NAT Instance Profile ARN
+    Value: !GetAtt VPNNATInstanceProfile.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-VPN-NAT-Instance-Profile-ARN'
+
+  VPNNATInstanceProfileName:
+    Description: VPN/NAT Instance Profile Name
+    Value: !Ref VPNNATInstanceProfile
+    Export:
+      Name: !Sub '${AWS::StackName}-VPN-NAT-Instance-Profile-Name'
+
+  PrivateInstanceProfileArn:
+    Description: Private Instance Profile ARN
+    Value: !GetAtt PrivateInstanceProfile.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-Instance-Profile-ARN'
+
+  PrivateInstanceProfileName:
+    Description: Private Instance Profile Name
+    Value: !Ref PrivateInstanceProfile
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-Instance-Profile-Name'
+
+  PrivateHostedZoneId:
+    Description: Route53 Private Hosted Zone ID (created or provided)
+    Value: !If [CreatePrivateHostedZone, !Ref PrivateHostedZone, !Ref PrivateHostedZoneId]
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-Hosted-Zone-ID'
+
+  PublicHostedZoneId:
+    Description: Route53 Public Hosted Zone ID (from parameter)
+    Value: !Ref PublicHostedZoneId
+    Export:
+      Name: !Sub '${AWS::StackName}-Public-Hosted-Zone-ID'
+
+  DomainName:
+    Description: Domain Name
+    Value: !Ref DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-Domain-Name'
+
+  ScriptsBucketName:
+    Description: Scripts S3 Bucket Name
+    Value: !Ref ScriptsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-Scripts-Bucket-Name'
+
+  DataBucketName:
+    Description: Data S3 Bucket Name
+    Value: !Ref DataBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-Data-Bucket-Name'
+
+  EFSFileSystemId:
+    Description: EFS File System ID
+    Value: !Ref EFSFileSystem
+    Export:
+      Name: !Sub '${AWS::StackName}-EFS-FileSystem-ID'
+
+  InstanceManagementRoleArn:
+    Description: IAM Role ARN for instance management
+    Value: !GetAtt InstanceManagementRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-Instance-Management-Role-ARN'
+
+  PrivateRouteTableId:
+    Description: Private Route Table ID (needed for compute stack)
+    Value: !Ref PrivateRouteTable
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-Route-Table-ID'
+
+  DomainName:
+    Description: Domain Name
+    Value: !Ref DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-Domain-Name'

@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'User group for DevCloud instance management'
+
+Parameters:
+  InstanceManagementRoleArn:
+    Type: String
+    Description: 'ARN of the instance management role'
+  
+  UserNames:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: 'Comma-separated list of IAM usernames to add to the group (optional)'
+
+Resources:
+  DevCloudUsersGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: DevCloud-Instance-Managers
+      Policies:
+        - PolicyName: AssumeInstanceManagementRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Ref InstanceManagementRoleArn
+                Condition:
+                  StringEquals:
+                    'aws:RequestedRegion': 'af-south-1'
+
+  # Optional: Add users to group (only if UserNames parameter is provided)
+  UserGroupMembership:
+    Type: AWS::IAM::UserToGroupAddition
+    Condition: HasUsers
+    Properties:
+      GroupName: !Ref DevCloudUsersGroup
+      Users: !Ref UserNames
+
+Conditions:
+  HasUsers: !Not [!Equals [!Join ['', !Ref UserNames], '']]
+
+Outputs:
+  GroupName:
+    Description: Name of the created user group
+    Value: !Ref DevCloudUsersGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-User-Group-Name'
+  
+  GroupArn:
+    Description: ARN of the created user group  
+    Value: !GetAtt DevCloudUsersGroup.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-User-Group-ARN'
