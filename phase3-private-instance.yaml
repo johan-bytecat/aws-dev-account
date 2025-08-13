@@ -37,8 +37,8 @@ Resources:
   PrivateInstance:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t4g.small
-      ImageId: ami-028edec535a686b33  # Amazon Linux 2023 AMI 2023.8.20250721.2 arm64
+      InstanceType: t3.small
+      ImageId: ami-042ad6e600ef0750b  # Amazon Linux 2023 AMI 2023.8.20250721.2 arm64
       KeyName: !Ref KeyPairName
       SubnetId: 
         Fn::ImportValue: !Sub '${FoundationStackName}-Private-Subnet-ID'
