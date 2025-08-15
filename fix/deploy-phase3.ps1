@@ -11,6 +11,9 @@ param(
     [string]$FoundationStackName = "devcloud-foundation",
     
     [Parameter(Mandatory=$false)]
+    [string]$IAMStackName = "devcloud-iam-roles",
+    
+    [Parameter(Mandatory=$false)]
     [string]$VPNNATStackName = "devcloud-vpn-nat",
     
     [Parameter(Mandatory=$false)]
@@ -37,6 +40,7 @@ Write-Host "=================================================" -ForegroundColor 
 Write-Host "AWS Profile: $Profile" -ForegroundColor Yellow
 Write-Host "Region: $Region" -ForegroundColor Yellow
 Write-Host "Foundation Stack: $FoundationStackName" -ForegroundColor Yellow
+Write-Host "IAM Stack: $IAMStackName" -ForegroundColor Yellow
 Write-Host "VPN/NAT Stack: $VPNNATStackName" -ForegroundColor Yellow
 Write-Host "Private Stack: $PrivateStackName" -ForegroundColor Yellow
 Write-Host "Key Pair: $KeyPairName" -ForegroundColor Yellow
@@ -65,17 +69,27 @@ try {
 # Check if foundation stack exists
 try {
     aws cloudformation describe-stacks --stack-name $FoundationStackName --region $Region --profile $Profile --output table | Out-Null
-    Write-Host "Foundation stack '$FoundationStackName' found" -ForegroundColor Green
+    Write-Host "✓ Foundation stack '$FoundationStackName' found" -ForegroundColor Green
 } catch {
     Write-Error "Foundation stack '$FoundationStackName' not found in region $Region"
     Write-Host "Deploy Phase 1 first with: .\deploy-phase1.ps1" -ForegroundColor Yellow
     exit 1
 }
 
+# Check if IAM stack exists
+try {
+    aws cloudformation describe-stacks --stack-name $IAMStackName --region $Region --profile $Profile --output table | Out-Null
+    Write-Host "✓ IAM stack '$IAMStackName' found" -ForegroundColor Green
+} catch {
+    Write-Error "IAM stack '$IAMStackName' not found in region $Region"
+    Write-Host "Deploy IAM roles first with: .\deploy-iam-roles.ps1 -FoundationStackName $FoundationStackName" -ForegroundColor Yellow
+    exit 1
+}
+
 # Check if VPN/NAT stack exists
 try {
     $vpnNatStack = aws cloudformation describe-stacks --stack-name $VPNNATStackName --region $Region --profile $Profile --output json | ConvertFrom-Json
-    Write-Host "VPN/NAT stack '$VPNNATStackName' found" -ForegroundColor Green
+    Write-Host "✓ VPN/NAT stack '$VPNNATStackName' found" -ForegroundColor Green
     
     # Check if VPN/NAT stack is in a good state
     $stackStatus = $vpnNatStack.Stacks[0].StackStatus
@@ -141,7 +155,7 @@ try {
         "--region", $Region,
         "--profile", $Profile,
         "--capabilities", "CAPABILITY_IAM",
-        "--parameter-overrides", "KeyPairName=$KeyPairName", "FoundationStackName=$FoundationStackName", "VPNNATStackName=$VPNNATStackName", "DomainName=$DomainName", "PrivateInstanceIP=$PrivateInstanceIP",
+        "--parameter-overrides", "KeyPairName=$KeyPairName", "FoundationStackName=$FoundationStackName", "IAMStackName=$IAMStackName", "VPNNATStackName=$VPNNATStackName", "DomainName=$DomainName", "PrivateInstanceIP=$PrivateInstanceIP",
         "--output", "table"
     )
     

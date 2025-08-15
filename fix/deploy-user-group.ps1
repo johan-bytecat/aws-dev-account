@@ -5,7 +5,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$FoundationStackName = "devcloud-foundation",
+    [string]$IAMStackName = "devcloud-iam-roles",
     
     [Parameter(Mandatory=$false)]
     [string]$UserGroupStackName = "devcloud-user-group",
@@ -19,25 +19,19 @@ param(
 
 Write-Host "Deploying DevCloud User Group..." -ForegroundColor Green
 
-# Get the instance management role ARN from the foundation stack
+# Check if IAM stack exists
 try {
-    $outputs = aws cloudformation describe-stacks --stack-name $FoundationStackName --region $Region --query 'Stacks[0].Outputs' --output json | ConvertFrom-Json
-    $roleArn = ($outputs | Where-Object { $_.OutputKey -eq "InstanceManagementRoleArn" }).OutputValue
-    
-    if (!$roleArn) {
-        throw "Could not retrieve InstanceManagementRoleArn from stack $FoundationStackName"
-    }
-    
-    Write-Host "Using Instance Management Role: $roleArn" -ForegroundColor Yellow
-    
+    aws cloudformation describe-stacks --stack-name $IAMStackName --region $Region --output table | Out-Null
+    Write-Host "✓ IAM stack '$IAMStackName' found" -ForegroundColor Green
 } catch {
-    Write-Error "Error retrieving role ARN: $_"
+    Write-Error "IAM stack '$IAMStackName' not found in region $Region"
+    Write-Host "Deploy IAM roles first with: .\deploy-iam-roles.ps1" -ForegroundColor Yellow
     exit 1
 }
 
 # Prepare parameters
 $parameters = @(
-    "ParameterKey=InstanceManagementRoleArn,ParameterValue=$roleArn"
+    "ParameterKey=IAMStackName,ParameterValue=$IAMStackName"
 )
 
 if ($UserNames.Length -gt 0) {
@@ -48,7 +42,7 @@ if ($UserNames.Length -gt 0) {
 
 # Deploy the user group stack
 try {
-    $result = aws cloudformation deploy `
+    aws cloudformation deploy `
         --template-file user-group.yaml `
         --stack-name $UserGroupStackName `
         --region $Region `

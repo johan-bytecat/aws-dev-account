@@ -1,11 +1,11 @@
 #!/usr/bin/env pwsh
 
 # Script to upload initialization and configuration scripts to S3
-# Run this after deploying the infrastructure but before starting instances
+# Run this after deploying the network infrastructure but before starting instances
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$StackName = "devcloud-foundation",
+    [string]$NetworkStackName = "devcloud-network",
     
     [Parameter(Mandatory=$false)]
     [string]$Region = "af-south-1",
@@ -19,10 +19,11 @@ $env:AWS_PROFILE = $Profile
 
 Write-Host "Uploading scripts to S3..." -ForegroundColor Green
 Write-Host "AWS Profile: $Profile" -ForegroundColor Yellow
+Write-Host "Network Stack: $NetworkStackName" -ForegroundColor Yellow
 
 # Get the scripts bucket name from CloudFormation stack
 try {
-    $outputs = aws cloudformation describe-stacks --stack-name $StackName --region $Region --query 'Stacks[0].Outputs' --output json | ConvertFrom-Json
+    $outputs = aws cloudformation describe-stacks --stack-name $NetworkStackName --region $Region --profile $Profile --query 'Stacks[0].Outputs' --output json | ConvertFrom-Json
     $scriptsBucket = ($outputs | Where-Object { $_.OutputKey -eq "ScriptsBucketName" }).OutputValue
     
     if (!$scriptsBucket) {
@@ -33,6 +34,7 @@ try {
     
 } catch {
     Write-Error "Error retrieving bucket name: $_"
+    Write-Host "Make sure the network stack '$NetworkStackName' is deployed first." -ForegroundColor Yellow
     exit 1
 }
 

@@ -14,6 +14,9 @@ param(
     [string]$FoundationStackName = "devcloud-foundation",
     
     [Parameter(Mandatory=$false)]
+    [string]$IAMStackName = "devcloud-iam-roles",
+    
+    [Parameter(Mandatory=$false)]
     [string]$ComputeStackName = "devcloud-vpn-nat",
     
     [Parameter(Mandatory=$false)]
@@ -37,6 +40,7 @@ Write-Host "=================================================" -ForegroundColor 
 Write-Host "AWS Profile: $Profile" -ForegroundColor Yellow
 Write-Host "Region: $Region" -ForegroundColor Yellow
 Write-Host "Foundation Stack: $FoundationStackName" -ForegroundColor Yellow
+Write-Host "IAM Stack: $IAMStackName" -ForegroundColor Yellow
 Write-Host "Compute Stack: $ComputeStackName" -ForegroundColor Yellow
 Write-Host "Key Pair: $KeyPairName" -ForegroundColor Yellow
 Write-Host "Domain: $DomainName" -ForegroundColor Yellow
@@ -65,10 +69,20 @@ try {
 # Check if foundation stack exists
 try {
     aws cloudformation describe-stacks --stack-name $FoundationStackName --region $Region --profile $Profile --output table | Out-Null
-    Write-Host "Foundation stack '$FoundationStackName' found" -ForegroundColor Green
+    Write-Host "✓ Foundation stack '$FoundationStackName' found" -ForegroundColor Green
 } catch {
     Write-Error "Foundation stack '$FoundationStackName' not found in region $Region"
     Write-Host "Deploy Phase 1 first with: .\deploy-phase1.ps1" -ForegroundColor Yellow
+    exit 1
+}
+
+# Check if IAM stack exists
+try {
+    aws cloudformation describe-stacks --stack-name $IAMStackName --region $Region --profile $Profile --output table | Out-Null
+    Write-Host "✓ IAM stack '$IAMStackName' found" -ForegroundColor Green
+} catch {
+    Write-Error "IAM stack '$IAMStackName' not found in region $Region"
+    Write-Host "Deploy IAM roles first with: .\deploy-iam-roles.ps1 -FoundationStackName $FoundationStackName" -ForegroundColor Yellow
     exit 1
 }
 
@@ -93,7 +107,7 @@ try {
         "--region", $Region,
         "--profile", $Profile,
         "--capabilities", "CAPABILITY_IAM",
-        "--parameter-overrides", "KeyPairName=$KeyPairName", "FoundationStackName=$FoundationStackName", "PublicHostedZoneId=$PublicHostedZoneId", "DomainName=$DomainName", "VPNNATPrivateIP=$VPNNATPrivateIP",
+        "--parameter-overrides", "KeyPairName=$KeyPairName", "FoundationStackName=$FoundationStackName", "IAMStackName=$IAMStackName", "PublicHostedZoneId=$PublicHostedZoneId", "DomainName=$DomainName", "VPNNATPrivateIP=$VPNNATPrivateIP",
         "--output", "table"
     )
     

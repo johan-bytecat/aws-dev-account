@@ -2,9 +2,10 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'User group for DevCloud instance management'
 
 Parameters:
-  InstanceManagementRoleArn:
+  IAMStackName:
     Type: String
-    Description: 'ARN of the instance management role'
+    Default: 'devcloud-iam-roles'
+    Description: 'Name of the IAM stack that contains the instance management role'
   
   UserNames:
     Type: CommaDelimitedList
@@ -23,7 +24,8 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: sts:AssumeRole
-                Resource: !Ref InstanceManagementRoleArn
+                Resource: !ImportValue 
+                  'Fn::Sub': '${IAMStackName}-Instance-Management-Role-ARN'
                 Condition:
                   StringEquals:
                     'aws:RequestedRegion': 'af-south-1'

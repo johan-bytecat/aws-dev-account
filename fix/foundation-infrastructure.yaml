@@ -207,133 +207,7 @@ Resources:
         - Key: Name
           Value: DevCloud-EFS-SG
 
-  # =============================================================================
-  # IAM ROLES AND POLICIES - Identity and access management
-  # =============================================================================
 
-  # IAM role for VPN/NAT instance - allows S3 access and DNS management for both zones
-  VPNNATRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: DevCloud-VPN-NAT-Role
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-      Policies:
-        - PolicyName: DevCloud-Scripts-Access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                Resource:
-                  - !Sub '${ScriptsBucket.Arn}/*'
-                  - !GetAtt ScriptsBucket.Arn
-        - PolicyName: DevCloud-Route53-Access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - route53:ChangeResourceRecordSets
-                  - route53:GetHostedZone
-                  - route53:ListResourceRecordSets
-                Resource: 
-                  - !Sub 
-                    - 'arn:aws:route53:::hostedzone/${PrivateZoneId}'
-                    - PrivateZoneId: !If [CreatePrivateHostedZone, !Ref PrivateHostedZone, !Ref PrivateHostedZoneId]
-                  - !Sub 'arn:aws:route53:::hostedzone/${PublicHostedZoneId}'
-              - Effect: Allow
-                Action:
-                  - route53:ListHostedZones
-                Resource: '*'
-
-  # IAM role for private instances - allows S3 access and private DNS management only
-  PrivateInstanceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: DevCloud-Private-Instance-Role
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-      Policies:
-        - PolicyName: DevCloud-Full-S3-Access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                Resource:
-                  - !Sub '${ScriptsBucket.Arn}/*'
-                  - !GetAtt ScriptsBucket.Arn
-                  - !Sub '${DataBucket.Arn}/*'
-                  - !GetAtt DataBucket.Arn
-        - PolicyName: DevCloud-Route53-Access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - route53:ChangeResourceRecordSets
-                  - route53:GetHostedZone
-                  - route53:ListResourceRecordSets
-                Resource: !Sub 
-                  - 'arn:aws:route53:::hostedzone/${PrivateZoneId}'
-                  - PrivateZoneId: !If [CreatePrivateHostedZone, !Ref PrivateHostedZone, !Ref PrivateHostedZoneId]
-              - Effect: Allow
-                Action:
-                  - route53:ListHostedZones
-                Resource: '*'
-
-  # Instance profile for VPN/NAT - allows EC2 to assume VPN/NAT role
-  VPNNATInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - !Ref VPNNATRole
-
-  # Instance profile for private instances - allows EC2 to assume private instance role
-  PrivateInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - !Ref PrivateInstanceRole
-
-  # IAM role for instance management operations (start/stop instances)
-  InstanceManagementRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: DevCloud-Instance-Management-Role
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                'aws:RequestedRegion': 'af-south-1'
 
   # =============================================================================
   # S3 STORAGE - Object storage buckets
@@ -454,30 +328,6 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-Private-SG-ID'
 
-  VPNNATInstanceProfileArn:
-    Description: VPN/NAT Instance Profile ARN
-    Value: !GetAtt VPNNATInstanceProfile.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-VPN-NAT-Instance-Profile-ARN'
-
-  VPNNATInstanceProfileName:
-    Description: VPN/NAT Instance Profile Name
-    Value: !Ref VPNNATInstanceProfile
-    Export:
-      Name: !Sub '${AWS::StackName}-VPN-NAT-Instance-Profile-Name'
-
-  PrivateInstanceProfileArn:
-    Description: Private Instance Profile ARN
-    Value: !GetAtt PrivateInstanceProfile.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-Private-Instance-Profile-ARN'
-
-  PrivateInstanceProfileName:
-    Description: Private Instance Profile Name
-    Value: !Ref PrivateInstanceProfile
-    Export:
-      Name: !Sub '${AWS::StackName}-Private-Instance-Profile-Name'
-
   PrivateHostedZoneId:
     Description: Route53 Private Hosted Zone ID (created or provided)
     Value: !If [CreatePrivateHostedZone, !Ref PrivateHostedZone, !Ref PrivateHostedZoneId]
@@ -513,12 +363,6 @@ Outputs:
     Value: !Ref EFSFileSystem
     Export:
       Name: !Sub '${AWS::StackName}-EFS-FileSystem-ID'
-
-  InstanceManagementRoleArn:
-    Description: IAM Role ARN for instance management
-    Value: !GetAtt InstanceManagementRole.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-Instance-Management-Role-ARN'
 
   PrivateRouteTableId:
     Description: Private Route Table ID (needed for compute stack)

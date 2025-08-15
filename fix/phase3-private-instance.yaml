@@ -11,6 +11,11 @@ Parameters:
     Default: 'devcloud-foundation'
     Description: 'Name of the foundation stack that contains VPC and S3 resources'
     
+  IAMStackName:
+    Type: String
+    Default: 'devcloud-iam-roles'
+    Description: 'Name of the IAM stack that contains roles and instance profiles'
+    
   VPNNATStackName:
     Type: String
     Default: 'devcloud-vpn-nat'
@@ -46,7 +51,7 @@ Resources:
       SecurityGroupIds:
         - Fn::ImportValue: !Sub '${FoundationStackName}-Private-SG-ID'
       IamInstanceProfile: !Select [1, !Split ['/', 
-        Fn::ImportValue: !Sub '${FoundationStackName}-Private-Instance-Profile-ARN']]
+        Fn::ImportValue: !Sub '${IAMStackName}-Private-Instance-Profile-ARN']]
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:

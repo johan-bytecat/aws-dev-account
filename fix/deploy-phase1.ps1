@@ -71,7 +71,6 @@ try {
         "--stack-name", $FoundationStackName,
         "--region", $Region,
         "--profile", $Profile,
-        "--capabilities", "CAPABILITY_NAMED_IAM",
         "--parameter-overrides", "DomainName=$DomainName", "VpcCidr=$VpcCidr", "PublicSubnetCidr=$PublicSubnetCidr", "PrivateSubnetCidr=$PrivateSubnetCidr", "PublicHostedZoneId=$PublicHostedZoneId", "PrivateHostedZoneId=$PrivateHostedZoneId",
         "--output", "table"
     )
@@ -101,10 +100,12 @@ Write-Host "="*60 -ForegroundColor Blue
 
 Write-Host "`nPhase 1 completed successfully!" -ForegroundColor Green
 Write-Host "`nNext Steps:" -ForegroundColor Yellow
-Write-Host "1. Upload scripts to S3 bucket:" -ForegroundColor White
+Write-Host "1. Deploy IAM roles:" -ForegroundColor White
+Write-Host "   .\deploy-iam-roles.ps1 -FoundationStackName $FoundationStackName" -ForegroundColor Cyan
+Write-Host "`n2. Upload scripts to S3 bucket:" -ForegroundColor White
 Write-Host "   .\upload-scripts.ps1 -StackName $FoundationStackName" -ForegroundColor Cyan
-Write-Host "`n2. Deploy Phase 2 (compute resources):" -ForegroundColor White
-Write-Host "   .\deploy-phase2.ps1 -KeyPairName <your-key-pair> -FoundationStackName $FoundationStackName" -ForegroundColor Cyan
+Write-Host "`n3. Deploy Phase 2 (compute resources):" -ForegroundColor White
+Write-Host "   .\deploy-phase2.ps1 -KeyPairName <your-key-pair> -FoundationStackName $FoundationStackName -IAMStackName devcloud-iam-roles" -ForegroundColor Cyan
 
 Write-Host "`n" + "="*60 -ForegroundColor Green
 Write-Host "PHASE 1 DEPLOYMENT COMPLETED SUCCESSFULLY!" -ForegroundColor Green
