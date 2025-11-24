@@ -8,7 +8,7 @@ param(
     [string]$KeyPairName,
     
     [Parameter(Mandatory=$false)]
-    [string]$NetworkStackName = "devcloud-network",
+    [string]$NetworkStackName = "bytecat-network",
     
     [Parameter(Mandatory=$false)]
     [string]$ApplicationStackName = "",  # Will be auto-generated if not provided
@@ -20,7 +20,7 @@ param(
     [string]$Region = "af-south-1",
     
     [Parameter(Mandatory=$false)]
-    [string]$DomainName = "devcloud.bytecat.co.za",
+    [string]$DomainName = "bytecat.co.za",
     
     [Parameter(Mandatory=$false)]
     [string]$PrivateInstanceIP = "172.16.2.100",
@@ -31,7 +31,7 @@ param(
 
 # Auto-generate application stack name if not provided
 if ([string]::IsNullOrEmpty($ApplicationStackName)) {
-    $ApplicationStackName = "devcloud-app-$ApplicationName"
+    $ApplicationStackName = "bytecat-app-$ApplicationName"
 }
 
 # Set AWS profile environment variable
@@ -179,7 +179,7 @@ Write-Host "  Stop:   .\manage-instances.ps1 -Action stop -Instance app -Applica
 
 Write-Host "`nApplication Resources:" -ForegroundColor Yellow
 Write-Host "  Instance IP: $PrivateInstanceIP" -ForegroundColor White
-Write-Host "  Data Bucket: devcloud-data-$ApplicationName-$($identity.Account)" -ForegroundColor White
+Write-Host "  Data Bucket: bytecat-data-$ApplicationName-$($identity.Account)" -ForegroundColor White
 Write-Host "  EFS Mount: /mnt/efs (on instance)" -ForegroundColor White
 
 Write-Host "`nConnectivity Testing:" -ForegroundColor Yellow

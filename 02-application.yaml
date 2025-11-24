@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'DevCloud Application Infrastructure - Kite Server with EFS and Data Storage'
+Description: 'Bytecat Application Infrastructure - Kite Server with EFS and Data Storage'
 
 Parameters:
   KeyPairName:
@@ -8,12 +8,12 @@ Parameters:
   
   NetworkStackName:
     Type: String
-    Default: 'devcloud-network'
+    Default: 'bytecat-network'
     Description: 'Name of the network stack that contains VPC and networking resources'
     
   DomainName:
     Type: String
-    Default: 'devcloud.bytecat.co.za'
+    Default: 'bytecat.co.za'
     Description: 'Domain name for the hosted zone'
   
   PrivateInstanceIP:
@@ -37,7 +37,7 @@ Resources:
   DataBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub 'devcloud-data-${ApplicationName}-${AWS::AccountId}'
+      BucketName: !Sub 'bytecat-data-${ApplicationName}-${AWS::AccountId}'
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -47,7 +47,7 @@ Resources:
         Status: Enabled
       Tags:
         - Key: Name
-          Value: !Sub 'DevCloud-Data-${ApplicationName}'
+          Value: !Sub 'Bytecat-Data-${ApplicationName}'
         - Key: Application
           Value: !Ref ApplicationName
 
@@ -64,7 +64,7 @@ Resources:
       ThroughputMode: bursting
       FileSystemTags:
         - Key: Name
-          Value: !Sub 'DevCloud-EFS-${ApplicationName}'
+          Value: !Sub 'Bytecat-EFS-${ApplicationName}'
         - Key: Application
           Value: !Ref ApplicationName
 
@@ -86,7 +86,7 @@ Resources:
   PrivateInstanceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub 'DevCloud-${ApplicationName}-Role-${AWS::StackName}'
+      RoleName: !Sub 'Bytecat-${ApplicationName}-Role-${AWS::StackName}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -97,7 +97,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
-        - PolicyName: !Sub 'DevCloud-${ApplicationName}-S3-Access'
+        - PolicyName: !Sub 'Bytecat-${ApplicationName}-S3-Access'
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -118,7 +118,7 @@ Resources:
                         Fn::ImportValue: !Sub '${NetworkStackName}-Scripts-Bucket-Name'
                   - !Sub 'arn:aws:s3:::${DataBucket}/*'
                   - !Sub 'arn:aws:s3:::${DataBucket}'
-        - PolicyName: !Sub 'DevCloud-${ApplicationName}-Route53-Access'
+        - PolicyName: !Sub 'Bytecat-${ApplicationName}-Route53-Access'
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -136,12 +136,46 @@ Resources:
                 Action:
                   - route53:ListHostedZones
                 Resource: '*'
+        - PolicyName: !Sub 'Bytecat-${ApplicationName}-BedRock-Sonnet4-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: 
+                  - arn:aws:bedrock:eu-west-1:886047113001:inference-profile/eu.anthropic.claude-sonnet-4-20250514-v1:0
+                  - arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0
+                  - arn:aws:bedrock:eu-north-1::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0
+                  - arn:aws:bedrock:eu-south-1::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0
+                  - arn:aws:bedrock:eu-south-2::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0
+                  - arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0
+                  - arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0
+
+        - PolicyName: !Sub 'Bytecat-${ApplicationName}-ECR-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/bytecat-*'
 
   # Instance profile for private instances - allows EC2 to assume private instance role
-  PrivateInstanceProfile:
+    PrivateInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
-      InstanceProfileName: !Sub 'DevCloud-${ApplicationName}-Role-${AWS::StackName}'
+      InstanceProfileName: !Sub 'Bytecat-${ApplicationName}-Role-${AWS::StackName}'
       Roles:
         - !Ref PrivateInstanceRole
 
@@ -150,7 +184,7 @@ Resources:
   # =============================================================================
 
   # Private instance - main application server with fixed IP and no direct internet access
-  PrivateInstance:
+    PrivateInstance:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: t3.small
@@ -176,15 +210,15 @@ Resources:
             # Set up logging for userdata execution
             exec > >(tee /var/log/user-data.log) 2>&1
             
-            echo "=== DevCloud ${ApplicationName} Instance Initialization Started ==="
+              echo "=== Bytecat ${ApplicationName} Instance Initialization Started ==="
             echo "Timestamp: $(date)"
 
             # Create directories for scripts and parameters
-            mkdir -p /opt/devcloud/scripts
-            mkdir -p /opt/devcloud/config
+              mkdir -p /opt/bytecat/scripts
+              mkdir -p /opt/bytecat/config
 
             # Save initialization parameters to file for future use
-            cat > /opt/devcloud/config/init-parameters.env << EOF
+              cat > /opt/bytecat/config/init-parameters.env << EOF
             APPLICATION_NAME=${ApplicationName}
             PRIVATE_HOSTED_ZONE_ID=${PrivateHostedZoneId}
             DOMAIN_NAME=${DomainName}
@@ -256,8 +290,8 @@ Resources:
             echo "Domain Name: ${DomainName}"
             echo "EFS File System: ${EFSFileSystem}"
             
-            if aws s3 cp s3://${ScriptsBucket}/init/private-instance-init.sh /opt/devcloud/scripts/private-instance-init.sh; then
-                chmod +x /opt/devcloud/scripts/private-instance-init.sh
+              if aws s3 cp s3://${ScriptsBucket}/init/private-instance-init.sh /opt/bytecat/scripts/private-instance-init.sh; then
+                  chmod +x /opt/bytecat/scripts/private-instance-init.sh
                 echo "Executing initialization script..."
                 if /opt/devcloud/scripts/private-instance-init.sh; then
                     echo "✓ Private instance initialization completed successfully"
@@ -270,10 +304,10 @@ Resources:
                 echo "Instance will continue without application-specific initialization"
             fi
             
-            echo "=== DevCloud ${ApplicationName} Instance Initialization Completed ==="
+              echo "=== Bytecat ${ApplicationName} Instance Initialization Completed ==="
             echo "Timestamp: $(date)"
-            echo "Parameters saved to: /opt/devcloud/config/init-parameters.env"
-            echo "Scripts stored in: /opt/devcloud/scripts/"
+              echo "Parameters saved to: /opt/bytecat/config/init-parameters.env"
+              echo "Scripts stored in: /opt/bytecat/scripts/"
             echo "EFS mounted at: /mnt/efs"
             echo "Log file: /var/log/user-data.log"
             echo "=========================================================="

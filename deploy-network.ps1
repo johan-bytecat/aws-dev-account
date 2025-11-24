@@ -8,13 +8,13 @@ param(
     [string]$KeyPairName,
     
     [Parameter(Mandatory=$false)]
-    [string]$NetworkStackName = "devcloud-network",
+    [string]$NetworkStackName = "bytecat-network",
     
     [Parameter(Mandatory=$false)]
     [string]$Region = "af-south-1",
     
     [Parameter(Mandatory=$false)]
-    [string]$DomainName = "devcloud.bytecat.co.za",
+    [string]$DomainName = "bytecat.co.za",
     
     [Parameter(Mandatory=$false)]
     [string]$VpcCidr = "172.16.0.0/16",
@@ -24,6 +24,9 @@ param(
     
     [Parameter(Mandatory=$false)]
     [string]$PrivateSubnetCidr = "172.16.2.0/24",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$SecondPrivateSubnetCidr = "172.16.3.0/24",
     
     [Parameter(Mandatory=$false)]
     [string]$VPNNATPrivateIP = "172.16.1.100",
@@ -93,6 +96,7 @@ try {
         "VpcCidr=$VpcCidr",
         "PublicSubnetCidr=$PublicSubnetCidr",
         "PrivateSubnetCidr=$PrivateSubnetCidr",
+        "SecondPrivateSubnetCidr=$SecondPrivateSubnetCidr",
         "PrivateHostedZoneId=$PrivateHostedZoneId",
         "VPNNATPrivateIP=$VPNNATPrivateIP",
         "--output", "table"
@@ -130,10 +134,11 @@ Write-Host "   .\deploy-application.ps1 -KeyPairName $KeyPairName -NetworkStackN
 Write-Host "`n3. Manage instances:" -ForegroundColor White
 Write-Host "   .\manage-instances.ps1 -Action status -NetworkStackName $NetworkStackName" -ForegroundColor Cyan
 
-Write-Host "`nNetwork Information:" -ForegroundColor Yellow
+Write-Host "Network Information:" -ForegroundColor Yellow
 Write-Host "  VPC CIDR: $VpcCidr" -ForegroundColor White
 Write-Host "  Public Subnet: $PublicSubnetCidr" -ForegroundColor White
 Write-Host "  Private Subnet: $PrivateSubnetCidr" -ForegroundColor White
+Write-Host "  Second Private Subnet: $SecondPrivateSubnetCidr" -ForegroundColor White
 Write-Host "  VPN/NAT Gateway: $VPNNATPrivateIP" -ForegroundColor White
 Write-Host "  WireGuard VPN: 10.0.0.0/24" -ForegroundColor White
 

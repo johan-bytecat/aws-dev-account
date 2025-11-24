@@ -5,7 +5,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$NetworkStackName = "devcloud-network",
+    [string]$NetworkStackName = "bytecat-network",
     
     [Parameter(Mandatory=$false)]
     [string]$Region = "af-south-1",

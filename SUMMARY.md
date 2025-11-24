@@ -1,0 +1,189 @@
+# CloudFormation Summary
+
+This document summarizes what the two CloudFormation templates create in AWS, the permissions they rely on, and what the EC2 user data scripts do.
+
+## Network Stack (`01-network.yaml`)
+
+- Creates:
+  - VPC (`AWS::EC2::VPC`) with DNS support and hostnames enabled.
+  - Public and private subnets (`AWS::EC2::Subnet`) in the first AZ.
+  - Internet Gateway and attachment to the VPC (`AWS::EC2::InternetGateway`, `AWS::EC2::VPCGatewayAttachment`).
+  - Public and private route tables and routes (`AWS::EC2::RouteTable`, `AWS::EC2::Route`) including:
+    - Default route from public subnet to the Internet Gateway.
+    - Default route from private subnet via the NAT/VPN EC2 instance.
+  - Subnet-to-route-table associations (`AWS::EC2::SubnetRouteTableAssociation`) for public and private subnets.
+  - Security groups (`AWS::EC2::SecurityGroup`):
+    - `VPNNATSecurityGroup` allowing:
+      - UDP/51820 from anywhere for WireGuard VPN.
+      - All traffic from the private subnet for NAT.
+    - `PrivateInstanceSecurityGroup` allowing:
+      - SSH from the public subnet CIDR.
+      - HTTP/HTTPS and application ports 8000–8999 from the WireGuard VPN CIDR `10.0.0.0/24`.
+      - SSH from the VPN CIDR `10.0.0.0/24`.
+    - `EFSSecurityGroup` allowing NFS (TCP/2049) from the private subnet CIDR.
+  - S3 bucket for scripts (`AWS::S3::Bucket`) named `bytecat-scripts-${AWS::AccountId}`, with public access blocked.
+  - Optional private Route 53 hosted zone (`AWS::Route53::HostedZone`) for the application domain, associated with the VPC (created only if a hosted zone ID is not provided).
+  - IAM role and instance profile for the VPN/NAT instance (`AWS::IAM::Role`, `AWS::IAM::InstanceProfile`) with:
+    - Trust policy for EC2.
+    - Managed policy `AmazonSSMManagedInstanceCore` for SSM.
+    - Inline S3 access to the scripts bucket.
+    - Inline Route 53 permissions for the private hosted zone and a specific public hosted zone ID.
+  - EC2 NAT/VPN instance (`AWS::EC2::Instance`) with:
+    - Type `t3.micro`, Amazon Linux 2023 AMI.
+    - Fixed private IP in the public subnet.
+    - Attached VPN/NAT security group and IAM instance profile.
+    - Source/destination check disabled to act as a NAT.
+    - 8 GiB gp3 root EBS volume.
+    - User data bootstrap script (see below).
+  - Stack outputs exporting IDs and useful values (VPC, subnets, security groups, hosted zone IDs, domain name, scripts bucket, instance ID, public/private IPs, private route table ID).
+
+- Permissions required (CloudFormation execution role):
+  - EC2:
+    - Create, describe, modify, and tag VPCs, subnets, internet gateways, route tables, routes, security groups, and EC2 instances.
+    - Attach Internet Gateways and modify instance attributes (e.g., source/dest check).
+    - Create and manage EBS volumes via block device mappings.
+  - S3:
+    - Create and configure the scripts bucket, including public access block settings and tagging.
+  - Route 53:
+    - Create and tag private hosted zones (if `PrivateHostedZoneId` is not supplied).
+  - IAM:
+    - Create roles and instance profiles.
+    - Put inline policies and attach managed policies.
+    - Add roles to instance profiles.
+  - General:
+    - Pass roles to EC2 (`iam:PassRole` for the NAT/VPN role).
+
+- Permissions granted to the VPN/NAT EC2 instance:
+  - SSM:
+    - `AmazonSSMManagedInstanceCore` (SSM agent connectivity, inventory, etc.).
+  - S3:
+    - `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` on the scripts bucket and its objects.
+  - Route 53:
+    - `route53:ChangeResourceRecordSets`, `route53:GetHostedZone`, `route53:ListResourceRecordSets` on:
+      - The private hosted zone (either created in this stack or passed in).
+      - A specific public hosted zone ID `Z01350882HWVKQIM61CH3`.
+    - `route53:ListHostedZones` on all hosted zones.
+
+  - VPN/NAT EC2 user data behavior:
+  - Redirects all user data output to `/var/log/user-data.log` (via `tee`) for troubleshooting.
+  - Logs startup banner and timestamp.
+  - Creates directories `/opt/bytecat/scripts` and `/opt/bytecat/config`.
+  - Writes initialization parameters to `/opt/bytecat/config/init-parameters.env`, including:
+    - Private hosted zone ID (created or provided).
+    - Public hosted zone ID.
+    - Domain name.
+    - Scripts S3 bucket name.
+  - Uses IMDSv2 to fetch and log:
+    - Instance ID.
+    - AMI ID.
+    - Instance type.
+  - Runs `yum update -y` to apply system updates.
+  - Logs key parameter values (scripts bucket, hosted zone IDs, domain).
+  - Downloads an initialization script from S3:
+    - Copies `s3://${ScriptsBucket}/init/vpn-nat-init.sh` to `/opt/bytecat/scripts/vpn-nat-init.sh`.
+    - Marks it executable and executes it.
+    - If the download or execution fails, logs an error and exits with a non‑zero code, causing user data to fail (detailed behavior of `vpn-nat-init.sh` itself is delegated to that script and not analyzed here).
+  - Logs completion, including where parameters and scripts are stored and the log file location.
+
+## Application Stack (`02-application.yaml`)
+
+- Creates:
+  - S3 data bucket (`AWS::S3::Bucket`) named `bytecat-data-${ApplicationName}-${AWS::AccountId}` with:
+    - Public access blocked.
+    - Versioning enabled.
+    - Tags for name and application.
+  - EFS file system (`AWS::EFS::FileSystem`) with:
+    - Encryption enabled.
+    - General purpose performance mode and bursting throughput.
+    - Application-specific tags.
+  - EFS mount target (`AWS::EFS::MountTarget`) in the private subnet:
+    - Subnet imported from the network stack’s private subnet export.
+    - Security group imported from the network stack’s EFS security group export.
+  - IAM role and instance profile for the private application instance (`AWS::IAM::Role`, `AWS::IAM::InstanceProfile`) with:
+    - Trust policy for EC2.
+    - Managed policy `AmazonSSMManagedInstanceCore`.
+    - Inline S3, Route 53, Bedrock, and ECR permissions (see below).
+  - Private EC2 application instance (`AWS::EC2::Instance`) with:
+    - Type `t3.small`, Amazon Linux 2023 AMI.
+    - Fixed private IP in the private subnet imported from the network stack.
+    - Security group imported from the network stack’s `PrivateInstanceSecurityGroup`.
+    - Attached application instance profile.
+    - 20 GiB gp3 root EBS volume.
+    - User data bootstrap script (see below).
+  - Stack outputs exporting:
+    - Private instance ID and private IP.
+    - Data bucket name.
+    - EFS file system ID.
+    - Application name.
+    - A combined “Application Network Configuration” string summarizing instance IP, EFS ID, and data bucket.
+
+- Permissions required (CloudFormation execution role):
+  - S3:
+    - Create, configure, and tag the application data bucket, including enabling versioning.
+  - EFS:
+    - Create file systems and mount targets.
+    - Tag EFS resources.
+  - EC2:
+    - Launch instances, including specifying subnets, security groups, key pairs, instance profiles, block devices, and user data.
+  - IAM:
+    - Create roles and instance profiles.
+    - Attach managed policies and put inline policies.
+    - Add roles to instance profiles.
+  - General:
+    - Import values from the network stack exports (CloudFormation cross-stack references).
+    - Pass roles to EC2 (`iam:PassRole` for the application role).
+
+- Permissions granted to the private application EC2 instance:
+  - SSM:
+    - `AmazonSSMManagedInstanceCore` for Session Manager and related services.
+  - S3:
+    - `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` on:
+      - Scripts bucket from the network stack (`${NetworkStackName}-Scripts-Bucket-Name`) and its objects.
+      - Application data bucket created in this stack and its objects.
+  - Route 53:
+    - `route53:ChangeResourceRecordSets`, `route53:GetHostedZone`, `route53:ListResourceRecordSets` on the private hosted zone imported from the network stack.
+    - `route53:ListHostedZones` on all hosted zones.
+  - Bedrock:
+    - `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on several region-specific Claude Sonnet 4 model ARNs and a specific inference profile.
+  - ECR:
+    - `ecr:GetAuthorizationToken` on all repositories.
+    - `ecr:BatchCheckLayerAvailability`, `ecr:GetDownloadUrlForLayer`, `ecr:BatchGetImage`, `ecr:DescribeRepositories`, `ecr:ListImages`, `ecr:DescribeImages` on `bytecat-*` repositories in the current account and region.
+
+  - Private application EC2 user data behavior:
+  - Redirects all user data output to `/var/log/user-data.log` (via `tee`).
+  - Logs startup banner and timestamp including the application name.
+  - Creates directories `/opt/bytecat/scripts` and `/opt/bytecat/config`.
+  - Writes initialization parameters to `/opt/bytecat/config/init-parameters.env`, including:
+    - Application name.
+    - Private hosted zone ID (imported from the network stack).
+    - Domain name (imported from the network stack).
+    - Scripts bucket name (imported from the network stack).
+    - Data bucket name created by this stack.
+    - EFS file system ID.
+    - VPN/NAT private IP imported from the network stack.
+  - Uses IMDSv2 to fetch and log:
+    - Instance ID.
+    - AMI ID.
+    - Instance type.
+    - Application name.
+  - Attempts to verify basic connectivity in a loop:
+    - Runs up to 10 attempts, logging “connectivity test attempt” messages.
+    - Uses `curl` with a short timeout to test reachability of the instance metadata service.
+    - On repeated failure (after 10 attempts) logs an error and exits with a non‑zero code.
+  - Runs `yum update -y` to apply system updates.
+  - Installs `amazon-efs-utils` package.
+  - Prepares and mounts EFS:
+    - Creates `/mnt/efs`.
+    - Mounts the EFS file system (ID from the template) at `/mnt/efs` with TLS.
+    - Appends an `/etc/fstab` entry using `${EFSFileSystem}.efs.${AWS::Region}.amazonaws.com:/` so the EFS mount persists across reboots.
+    - Changes ownership of `/mnt/efs` to `ec2-user:ec2-user`.
+  - Downloads and runs an initialization script from S3:
+    - Copies `s3://${ScriptsBucket}/init/private-instance-init.sh` to `/opt/bytecat/scripts/private-instance-init.sh`.
+    - Marks it executable and executes it.
+    - On script failure, logs the exit code and exits with a non‑zero status.
+    - If the script cannot be downloaded from S3, logs a warning and explicitly states that the instance will continue without application-specific initialization (detailed behavior of `private-instance-init.sh` is delegated to that script and not analyzed here).
+  - Logs completion, including:
+    - Path to the parameter file.
+    - Where scripts are stored.
+    - EFS mount location.
+    - Log file path.
