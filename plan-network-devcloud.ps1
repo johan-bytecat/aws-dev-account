@@ -1,20 +1,20 @@
 #!/usr/bin/env pwsh
 
 # AWS DevCloud Network Infrastructure Change Set Script
-# Creates a change set for network stack, describes it, and optionally executes or deletes it
+# Creates a change set for devcloud network stack, describes it, and optionally executes or deletes it
 
 param(
     [Parameter(Mandatory=$true)]
     [string]$KeyPairName,
     
     [Parameter(Mandatory=$false)]
-    [string]$NetworkStackName = "bytecat-network",
+    [string]$NetworkStackName = "devcloud-network",
     
     [Parameter(Mandatory=$false)]
     [string]$Region = "af-south-1",
     
     [Parameter(Mandatory=$false)]
-    [string]$DomainName = "bytecat.co.za",
+    [string]$DomainName = "devcloud.bytecat.co.za",
     
     [Parameter(Mandatory=$false)]
     [string]$VpcCidr = "172.16.0.0/16",
@@ -44,7 +44,7 @@ param(
 # Set AWS profile environment variable
 $env:AWS_PROFILE = $Profile
 
-$ChangeSetName = "network-update-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$ChangeSetName = "devcloud-network-update-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 
 Write-Host "AWS DevCloud Network Infrastructure Change Set" -ForegroundColor Green
 Write-Host "=============================================" -ForegroundColor Green
@@ -97,7 +97,7 @@ Write-Host "CREATING CHANGE SET" -ForegroundColor Blue
 Write-Host "="*60 -ForegroundColor Blue
 
 try {
-    Write-Host "Creating change set for network stack..." -ForegroundColor Blue
+    Write-Host "Creating change set for devcloud network stack..." -ForegroundColor Blue
     
     # Build parameters JSON
     $parametersJson = @(
@@ -115,7 +115,7 @@ try {
         "cloudformation", "create-change-set",
         "--stack-name", $NetworkStackName,
         "--change-set-name", $ChangeSetName,
-        "--template-body", "file://01-network.yaml",
+        "--template-body", "file://01-network-devcloud.yaml",
         "--region", $Region,
         "--profile", $Profile,
         "--capabilities", "CAPABILITY_NAMED_IAM",
@@ -223,8 +223,8 @@ if ($Execute) {
             "--region", $Region,
             "--profile", $Profile
         )
-        Write-Host "ignore delete-change-set for now."
-     #   & aws @deleteArgs
+        
+        & aws @deleteArgs
 
         if ($LASTEXITCODE -eq 0) {
             Write-Host "✓ Change set deleted successfully!" -ForegroundColor Green
