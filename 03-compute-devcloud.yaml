@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DevCloud Compute Infrastructure - Security Group and IAM Role'
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: 'devcloud-network'
+    Description: 'Name of the network stack that contains VPC and networking resources'
+    
+  ApplicationStackName:
+    Type: String
+    Default: 'devcloud-application'
+    Description: 'Name of the application stack that contains data bucket'
+
+Resources:
+  # =============================================================================
+  # SECURITY GROUP FOR COMPUTE INSTANCES
+  # =============================================================================
+
+  ComputeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security group for compute instances with VPN and on-net access'
+      VpcId: 
+        Fn::ImportValue: !Sub '${NetworkStackName}-VPC-ID'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/8
+          Description: 'SSH from VPN'
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 10.0.0.0/8
+          Description: 'HTTP from VPN'
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 172.16.2.0/24
+          Description: 'SSH from on-net'
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 172.16.2.0/24
+          Description: 'HTTP from on-net'
+        - IpProtocol: tcp
+          FromPort: 41952
+          ToPort: 41952
+          CidrIp: 172.16.2.0/24
+          Description: 'libfabric data plane'
+        - IpProtocol: tcp
+          FromPort: 50051
+          ToPort: 50051
+          CidrIp: 172.16.2.0/24
+          Description: 'gRPC'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 172.16.2.0/24
+          Description: 'libfabric control plane'
+      Tags:
+        - Key: ByteCatCompute
+          Value: '1'
+
+  # =============================================================================
+  # IAM ROLE FOR COMPUTE INSTANCES
+  # =============================================================================
+
+  ComputeInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'DevCloud-Compute-Role-${AWS::StackName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: 'DevCloud-Compute-S3-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 
+                    - 'arn:aws:s3:::${ScriptsBucketName}/*'
+                    - ScriptsBucketName: 
+                        Fn::ImportValue: !Sub '${NetworkStackName}-Scripts-Bucket-Name'
+                  - !Sub 
+                    - 'arn:aws:s3:::${ScriptsBucketName}'
+                    - ScriptsBucketName: 
+                        Fn::ImportValue: !Sub '${NetworkStackName}-Scripts-Bucket-Name'
+                  - !Sub 
+                    - 'arn:aws:s3:::${DataBucketName}/*'
+                    - DataBucketName: 
+                        Fn::ImportValue: !Sub '${ApplicationStackName}-Data-Bucket-Name'
+                  - !Sub 
+                    - 'arn:aws:s3:::${DataBucketName}'
+                    - DataBucketName: 
+                        Fn::ImportValue: !Sub '${ApplicationStackName}-Data-Bucket-Name'
+                  - 'arn:aws:s3:::bytecat/*'
+                  - 'arn:aws:s3:::bytecat'
+        - PolicyName: 'DevCloud-Compute-Route53-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                  - route53:GetHostedZone
+                  - route53:ListResourceRecordSets
+                Resource: 
+                  - !Sub 
+                    - 'arn:aws:route53:::hostedzone/${PrivateHostedZoneId}'
+                    - PrivateHostedZoneId: 
+                        Fn::ImportValue: !Sub '${NetworkStackName}-Private-Hosted-Zone-ID'
+              - Effect: Allow
+                Action:
+                  - route53:ListHostedZones
+                Resource: '*'
+        - PolicyName: 'DevCloud-Compute-EC2-Describe-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstanceTypes
+                  - ec2:DescribeImages
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSpotPriceHistory
+                Resource: '*'
+        - PolicyName: 'DevCloud-Compute-Pricing-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - pricing:GetProducts
+                  - pricing:DescribeServices
+                Resource: '*'
+        - PolicyName: 'DevCloud-Compute-ECR-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+      Tags:
+        - Key: ByteCatCompute
+          Value: '1'
+
+  # Instance profile for compute instances
+  ComputeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub 'DevCloud-Compute-Profile-${AWS::StackName}'
+      Roles:
+        - !Ref ComputeInstanceRole
+
+Outputs:
+  ComputeSecurityGroupId:
+    Description: 'Compute Security Group ID'
+    Value: !Ref ComputeSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-Compute-SG-ID'
+
+  ComputeInstanceRoleArn:
+    Description: 'Compute Instance Role ARN'
+    Value: !GetAtt ComputeInstanceRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-Compute-Role-ARN'
+
+  ComputeInstanceProfileName:
+    Description: 'Compute Instance Profile Name'
+    Value: !Ref ComputeInstanceProfile
+    Export:
+      Name: !Sub '${AWS::StackName}-Compute-Profile-Name'

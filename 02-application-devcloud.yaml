@@ -136,6 +136,44 @@ Resources:
                 Action:
                   - route53:ListHostedZones
                 Resource: '*'
+        - PolicyName: !Sub 'DevCloud-${ApplicationName}-EC2-Describe-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstanceTypes
+                  - ec2:DescribeImages
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSpotPriceHistory
+                  - iam:ListInstanceProfiles
+                  - iam:ListInstanceProfileTags
+                  - iam:ListRoleTags
+                Resource: '*'
+
+        - PolicyName: !Sub 'DevCloud-${ApplicationName}-Pricing-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - pricing:GetProducts
+                  - pricing:DescribeServices
+                Resource: '*'
+
+        - PolicyName: !Sub 'DevCloud-${ApplicationName}-ECR-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
 
   # Instance profile for private instances - allows EC2 to assume private instance role
   PrivateInstanceProfile:
@@ -153,7 +191,7 @@ Resources:
   PrivateInstance:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t3.small
+      InstanceType: t3.medium
       ImageId: ami-042ad6e600ef0750b  # Amazon Linux 2023 AMI 2023.8.20250721.2 x86_64
       KeyName: !Ref KeyPairName
       SubnetId: 
