@@ -144,6 +144,8 @@ Resources:
                 Action:
                   - ec2:DescribeInstanceTypes
                   - ec2:DescribeImages
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
                   - ec2:DescribeSubnets
                   - ec2:DescribeVpcs
                   - ec2:DescribeSecurityGroups
@@ -152,6 +154,49 @@ Resources:
                   - iam:ListInstanceProfileTags
                   - iam:ListRoleTags
                 Resource: '*'
+
+        - PolicyName: !Sub 'DevCloud-${ApplicationName}-EC2-LaunchTemplate-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateLaunchTemplate
+                  - ec2:CreateLaunchTemplateVersion
+                  - ec2:DeleteLaunchTemplate
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeLaunchTemplateVersions
+                  - ec2:ModifyLaunchTemplate
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:RunInstances
+                  - ec2:CreateFleet
+                  - ec2:DeleteFleets
+                  - ec2:TerminateInstances
+                  - ec2:CreateTags
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/DevCloud-${ApplicationName}-Role-${AWS::StackName}'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - ec2.amazonaws.com
+                      - ec2fleet.amazonaws.com
+
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/DevCloud-Compute-Role-*'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - ec2.amazonaws.com
+                      - ec2fleet.amazonaws.com
 
         - PolicyName: !Sub 'DevCloud-${ApplicationName}-Pricing-Access'
           PolicyDocument:
@@ -191,7 +236,7 @@ Resources:
   PrivateInstance:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t3.medium
+      InstanceType: t3.large
       ImageId: ami-042ad6e600ef0750b  # Amazon Linux 2023 AMI 2023.8.20250721.2 x86_64
       KeyName: !Ref KeyPairName
       SubnetId: 
