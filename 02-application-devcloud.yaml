@@ -220,6 +220,35 @@ Resources:
                   - ecr:BatchGetImage
                 Resource: '*'
 
+        - PolicyName: !Sub 'DevCloud-${ApplicationName}-Bedrock-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Global cross-region inference profiles (routed from af-south-1)
+              - Sid: AllowGlobalInferenceProfiles
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub 'arn:aws:bedrock:af-south-1:${AWS::AccountId}:inference-profile/global.anthropic.*'
+              # EU cross-region inference profiles (routed from eu-west-1)
+              - Sid: AllowEUInferenceProfiles
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub 'arn:aws:bedrock:eu-west-1:${AWS::AccountId}:inference-profile/eu.anthropic.*'
+              # Underlying Anthropic foundation models in all destination regions
+              - Sid: AllowAnthropicFoundationModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - 'arn:aws:bedrock:*::foundation-model/anthropic.*'
+
   # Instance profile for private instances - allows EC2 to assume private instance role
   PrivateInstanceProfile:
     Type: AWS::IAM::InstanceProfile
