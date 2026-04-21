@@ -1,0 +1,488 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Bytecatd Parallel Application Infrastructure - Kite Server with EFS and Data Storage'
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access'
+
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: 'ID of the private subnet for the application instance and EFS mount target'
+
+  PrivateSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: 'ID of the security group assigned to the private application instance'
+
+  EFSSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: 'ID of the security group assigned to the EFS mount target'
+
+  PrivateInstanceType:
+    Type: String
+    Default: 't3.large'
+    Description: 'EC2 instance type for the private application instance'
+
+  PrivateInstanceIP:
+    Type: String
+    Default: '172.16.2.100'
+    Description: 'Fixed private IP address for private instance'
+    AllowedPattern: '^172\.16\.2\.[0-9]{1,3}$'
+    ConstraintDescription: 'Must be a valid IP address in the private subnet range (172.16.2.0/24)'
+
+  ApplicationName:
+    Type: String
+    Default: 'kite-server'
+    Description: 'Name of the application (used for resource naming)'
+
+Resources:
+  # =============================================================================
+  # S3 STORAGE - Application data bucket
+  # =============================================================================
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'bytecatd-data-${ApplicationName}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub 'Bytecatd-Data-${ApplicationName}'
+        - Key: Application
+          Value: !Ref ApplicationName
+
+  # =============================================================================
+  # EFS FILE SYSTEM - Shared application storage
+  # =============================================================================
+
+  EFSFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub 'Bytecatd-EFS-${ApplicationName}'
+        - Key: Application
+          Value: !Ref ApplicationName
+
+  EFSMountTarget:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Ref PrivateSubnetId
+      SecurityGroups:
+        - !Ref EFSSecurityGroupId
+
+  # =============================================================================
+  # IAM ROLES FOR APPLICATION INSTANCE
+  # =============================================================================
+
+  PrivateInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'Bytecatd-${ApplicationName}-Role-${AWS::StackName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Ref AnthropicBedrockAccessManagedPolicy
+        - !Ref OpenAIGptOssBedrockAccessManagedPolicy
+        - !Ref MistralBedrockAccessManagedPolicy
+        - !Ref DeepSeekBedrockAccessManagedPolicy
+        - !Ref NVIDIANemotronBedrockAccessManagedPolicy
+      Policies:
+        - PolicyName: !Sub 'Bytecatd-${ApplicationName}-S3-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${DataBucket}/*'
+                  - !Sub 'arn:aws:s3:::${DataBucket}'
+        - PolicyName: !Sub 'Bytecatd-${ApplicationName}-EC2-Describe-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstanceTypes
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSpotPriceHistory
+                  - iam:ListInstanceProfiles
+                  - iam:ListInstanceProfileTags
+                  - iam:ListRoleTags
+                Resource: '*'
+        - PolicyName: !Sub 'Bytecatd-${ApplicationName}-EC2-LaunchTemplate-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateLaunchTemplate
+                  - ec2:CreateLaunchTemplateVersion
+                  - ec2:DeleteLaunchTemplate
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeLaunchTemplateVersions
+                  - ec2:ModifyLaunchTemplate
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:RunInstances
+                  - ec2:CreateFleet
+                  - ec2:DeleteFleets
+                  - ec2:TerminateInstances
+                  - ec2:CreateTags
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/Bytecatd-${ApplicationName}-Role-${AWS::StackName}'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - ec2.amazonaws.com
+                      - ec2fleet.amazonaws.com
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/Bytecatd-Compute-Role-*'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - ec2.amazonaws.com
+                      - ec2fleet.amazonaws.com
+        - PolicyName: !Sub 'Bytecatd-${ApplicationName}-Pricing-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - pricing:GetProducts
+                  - pricing:DescribeServices
+                Resource: '*'
+        - PolicyName: !Sub 'Bytecatd-${ApplicationName}-ECR-Access'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+
+  # =============================================================================
+  # BEDROCK ACCESS POLICIES - separated by provider/model family for easy removal
+  # =============================================================================
+
+  AnthropicBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-Anthropic-Access-${AWS::StackName}'
+      Description: 'Anthropic Bedrock access via inference profiles and EU/US/ZA foundation models only'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowGlobalInferenceProfiles
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - !Sub 'arn:aws:bedrock:af-south-1:${AWS::AccountId}:inference-profile/global.anthropic.*'
+          - Sid: AllowEUInferenceProfiles
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - !Sub 'arn:aws:bedrock:eu-west-1:${AWS::AccountId}:inference-profile/eu.anthropic.*'
+          - Sid: AllowAnthropicFoundationModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:af-south-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-central-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-central-2::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-south-2::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-west-3::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:us-west-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/anthropic.*'
+
+  OpenAIGptOssBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-OpenAI-GptOss-Access-${AWS::StackName}'
+      Description: 'OpenAI GPT-OSS Bedrock access in EU and US regions only'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowOpenAIGptOssModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:eu-central-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-central-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/openai.gpt-oss-20b-1:0'
+
+  MistralBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-Mistral-Access-${AWS::StackName}'
+      Description: 'Mistral Bedrock access in EU and US regions only, excluding APAC and GovCloud'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowMistralModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:eu-central-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-west-3::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/mistral.*'
+
+  DeepSeekBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-DeepSeek-Access-${AWS::StackName}'
+      Description: 'DeepSeek Bedrock access in supported EU and US regions only'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowDeepSeekModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/deepseek.*'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/deepseek.*'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/deepseek.*'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/deepseek.*'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/deepseek.*'
+
+  NVIDIANemotronBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-NVIDIA-Nemotron-Access-${AWS::StackName}'
+      Description: 'NVIDIA Nemotron Bedrock access in supported EU and US regions only'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowNVIDIANemotronModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/nvidia.nemotron*'
+
+  PrivateInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub 'Bytecatd-${ApplicationName}-Role-${AWS::StackName}'
+      Roles:
+        - !Ref PrivateInstanceRole
+
+  # =============================================================================
+  # PRIVATE APPLICATION INSTANCE
+  # =============================================================================
+
+  PrivateInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref PrivateInstanceType
+      ImageId: ami-042ad6e600ef0750b
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref PrivateSubnetId
+      PrivateIpAddress: !Ref PrivateInstanceIP
+      SecurityGroupIds:
+        - !Ref PrivateSecurityGroupId
+      IamInstanceProfile: !Ref PrivateInstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+
+            exec > >(tee /var/log/user-data.log) 2>&1
+
+            echo "=== Bytecatd ${ApplicationName} Instance Initialization Started ==="
+            echo "Timestamp: $(date)"
+
+            mkdir -p /opt/bytecat/config
+
+            cat > /opt/bytecat/config/init-parameters.env << EOF
+            APPLICATION_NAME=${ApplicationName}
+            DATA_BUCKET=${DataBucket}
+            EFS_FILESYSTEM_ID=${EFSFileSystem}
+            EOF
+
+            TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" -s)
+            INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/instance-id)
+            AMI_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/ami-id)
+            INSTANCE_TYPE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/instance-type)
+
+            echo "Instance ID: $INSTANCE_ID"
+            echo "AMI ID: $AMI_ID"
+            echo "Instance Type: $INSTANCE_TYPE"
+            echo "Application: ${ApplicationName}"
+            echo "=========================================================="
+
+            echo "Updating system packages..."
+            yum update -y
+
+            echo "Installing EFS utilities..."
+            yum install -y amazon-efs-utils
+
+            echo "Setting up EFS mount..."
+            mkdir -p /mnt/efs
+
+            echo "Mounting EFS filesystem: ${EFSFileSystem}"
+            mount -t efs -o tls ${EFSFileSystem}:/ /mnt/efs
+
+            echo "${EFSFileSystem}.efs.${AWS::Region}.amazonaws.com:/ /mnt/efs efs tls,_netdev" >> /etc/fstab
+
+            chown ec2-user:ec2-user /mnt/efs
+
+            echo "Data Bucket: ${DataBucket}"
+            echo "EFS File System: ${EFSFileSystem}"
+
+            echo "=== Bytecatd ${ApplicationName} Instance Initialization Completed ==="
+            echo "Timestamp: $(date)"
+            echo "Parameters saved to: /opt/bytecat/config/init-parameters.env"
+            echo "EFS mounted at: /mnt/efs"
+            echo "Log file: /var/log/user-data.log"
+            echo "=========================================================="
+          - ApplicationName: !Ref ApplicationName
+            DataBucket: !Ref DataBucket
+            EFSFileSystem: !Ref EFSFileSystem
+      Tags:
+        - Key: Name
+          Value: !Sub 'Bytecatd-${ApplicationName}'
+        - Key: Application
+          Value: !Ref ApplicationName
+
+Outputs:
+  PrivateInstanceId:
+    Description: Private Instance ID
+    Value: !Ref PrivateInstance
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-Instance-ID'
+
+  PrivateInstancePrivateIP:
+    Description: Private Instance Private IP (Fixed)
+    Value: !GetAtt PrivateInstance.PrivateIp
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-Instance-Private-IP'
+
+  DataBucketName:
+    Description: Application Data S3 Bucket Name
+    Value: !Ref DataBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-Data-Bucket-Name'
+
+  EFSFileSystemId:
+    Description: EFS File System ID
+    Value: !Ref EFSFileSystem
+    Export:
+      Name: !Sub '${AWS::StackName}-EFS-FileSystem-ID'
+
+  ApplicationName:
+    Description: Application Name
+    Value: !Ref ApplicationName
+    Export:
+      Name: !Sub '${AWS::StackName}-Application-Name'
+
+  ApplicationNetworkConfiguration:
+    Description: 'Application Network Configuration'
+    Value: !Sub
+      - 'Application: ${ApplicationName} | Instance: ${PrivateInstanceIP} | EFS: ${EFSFileSystem} | Data: ${DataBucket}'
+      - PrivateInstanceIP: !Ref PrivateInstanceIP
+        EFSFileSystem: !Ref EFSFileSystem
+        DataBucket: !Ref DataBucket
+        ApplicationName: !Ref ApplicationName
+    Export:
+      Name: !Sub '${AWS::StackName}-Application-Network-Configuration'
