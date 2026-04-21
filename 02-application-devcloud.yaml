@@ -96,6 +96,11 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Ref AnthropicBedrockAccessManagedPolicy
+        - !Ref OpenAIGptOssBedrockAccessManagedPolicy
+        - !Ref MistralBedrockAccessManagedPolicy
+        - !Ref DeepSeekBedrockAccessManagedPolicy
+        - !Ref NVIDIANemotronBedrockAccessManagedPolicy
       Policies:
         - PolicyName: !Sub 'DevCloud-${ApplicationName}-S3-Access'
           PolicyDocument:
@@ -220,34 +225,165 @@ Resources:
                   - ecr:BatchGetImage
                 Resource: '*'
 
-        - PolicyName: !Sub 'DevCloud-${ApplicationName}-Bedrock-Access'
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              # Global cross-region inference profiles (routed from af-south-1)
-              - Sid: AllowGlobalInferenceProfiles
-                Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                Resource:
-                  - !Sub 'arn:aws:bedrock:af-south-1:${AWS::AccountId}:inference-profile/global.anthropic.*'
-              # EU cross-region inference profiles (routed from eu-west-1)
-              - Sid: AllowEUInferenceProfiles
-                Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                Resource:
-                  - !Sub 'arn:aws:bedrock:eu-west-1:${AWS::AccountId}:inference-profile/eu.anthropic.*'
-              # Underlying Anthropic foundation models in all destination regions
-              - Sid: AllowAnthropicFoundationModels
-                Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                Resource:
-                  - 'arn:aws:bedrock:*::foundation-model/anthropic.*'
+  # =============================================================================
+  # BEDROCK ACCESS POLICIES - separated by provider/model family for easy removal
+  # =============================================================================
+
+  AnthropicBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'DevCloud-${ApplicationName}-Bedrock-Anthropic-Access-${AWS::StackName}'
+      Description: 'Anthropic Bedrock access via inference profiles and EU/US/ZA foundation models only'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Global cross-region inference profiles (routed from af-south-1)
+          - Sid: AllowGlobalInferenceProfiles
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - !Sub 'arn:aws:bedrock:af-south-1:${AWS::AccountId}:inference-profile/global.anthropic.*'
+          # EU cross-region inference profiles (routed from eu-west-1)
+          - Sid: AllowEUInferenceProfiles
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - !Sub 'arn:aws:bedrock:eu-west-1:${AWS::AccountId}:inference-profile/eu.anthropic.*'
+          # Underlying Anthropic foundation models limited to EU, US, and ZA only
+          - Sid: AllowAnthropicFoundationModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:af-south-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-central-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-central-2::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-south-2::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:eu-west-3::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:us-west-1::foundation-model/anthropic.*'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/anthropic.*'
+
+  OpenAIGptOssBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'DevCloud-${ApplicationName}-Bedrock-OpenAI-GptOss-Access-${AWS::StackName}'
+      Description: 'OpenAI GPT-OSS Bedrock access in EU and US regions only'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowOpenAIGptOssModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:eu-central-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-central-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/openai.gpt-oss-20b-1:0'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/openai.gpt-oss-120b-1:0'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/openai.gpt-oss-20b-1:0'
+
+  MistralBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'DevCloud-${ApplicationName}-Bedrock-Mistral-Access-${AWS::StackName}'
+      Description: 'Mistral Bedrock access in EU and US regions only, excluding APAC and GovCloud'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowMistralModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:eu-central-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:eu-west-3::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/mistral.*'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/mistral.*'
+
+  DeepSeekBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'DevCloud-${ApplicationName}-Bedrock-DeepSeek-Access-${AWS::StackName}'
+      Description: 'DeepSeek Bedrock access in supported EU and US regions only'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowDeepSeekModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:eu-north-1::foundation-model/deepseek.*'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/deepseek.*'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/deepseek.*'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/deepseek.*'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/deepseek.*'
+
+  NVIDIANemotronBedrockAccessManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'DevCloud-${ApplicationName}-Bedrock-NVIDIA-Nemotron-Access-${AWS::StackName}'
+      Description: 'NVIDIA Nemotron Bedrock access in supported EU and US regions only'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowNVIDIANemotronModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:Converse
+              - bedrock:ConverseStream
+            Resource:
+              - 'arn:aws:bedrock:eu-south-1::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:eu-west-1::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:eu-west-2::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:us-east-1::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:us-east-2::foundation-model/nvidia.nemotron*'
+              - 'arn:aws:bedrock:us-west-2::foundation-model/nvidia.nemotron*'
 
   # Instance profile for private instances - allows EC2 to assume private instance role
   PrivateInstanceProfile:
