@@ -1,7 +1,8 @@
 #!/usr/bin/env pwsh
 
-# AWS Bytecatd Parallel Application Deployment Script
-# Deploys a parallel-safe application stack with unique names and an auto-selected private IP.
+# AWS Bytecatd Application Deployment Script
+# Defaults to a stable stack name so reruns update the same resources.
+# Pass a different -ApplicationStackName when you intentionally want a parallel deployment.
 # Defaults to validation/dry-run mode. Use -Deploy to actually deploy.
 
 param(
@@ -9,34 +10,22 @@ param(
     [string]$KeyPairName,
 
     [Parameter(Mandatory=$true)]
+    [string]$VpcId,
+
+    [Parameter(Mandatory=$true)]
     [string]$PrivateSubnetId,
 
-    [Parameter(Mandatory=$true)]
-    [string]$PrivateSecurityGroupId,
-
-    [Parameter(Mandatory=$true)]
-    [string]$EFSSecurityGroupId,
-
     [Parameter(Mandatory=$false)]
-    [string]$VpcId = "",
-
-    [Parameter(Mandatory=$false)]
-    [string]$ApplicationStackName = "",
+    [string]$ApplicationStackName = "bytecatd-app",
 
     [Parameter(Mandatory=$false)]
     [string]$ApplicationName = "",
-
-    [Parameter(Mandatory=$false)]
-    [string]$DeploymentId = "",
 
     [Parameter(Mandatory=$false)]
     [string]$Region = "af-south-1",
 
     [Parameter(Mandatory=$false)]
     [string]$PrivateInstanceType = "t3.large",
-
-    [Parameter(Mandatory=$false)]
-    [string]$PrivateInstanceIP = "",
 
     [Parameter(Mandatory=$false)]
     [string]$Profile = "bytecatdev",
@@ -50,35 +39,6 @@ $RepositoryRoot = Split-Path -Parent $ScriptRoot
 $ManifestPath = Join-Path $ScriptRoot ".last_parallel_deployment.json"
 $TemplateFile = "deploy/01_app_deploy.yaml"
 
-function Get-NextAvailablePrivateIp {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$SubnetId,
-
-        [int]$StartHost = 101,
-        [int]$EndHost = 250
-    )
-
-    $usedIpOutput = aws ec2 describe-instances --region $Region --profile $Profile --filters Name=subnet-id,Values=$SubnetId Name=instance-state-name,Values=pending,running,stopping,stopped --query "Reservations[].Instances[].PrivateIpAddress" --output text
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not inspect existing private IP addresses in subnet '$SubnetId'."
-    }
-
-    $usedIps = @{}
-    foreach ($ip in ($usedIpOutput -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-        $usedIps[$ip.Trim()] = $true
-    }
-
-    for ($host = $StartHost; $host -le $EndHost; $host++) {
-        $candidate = "172.16.2.$host"
-        if (-not $usedIps.ContainsKey($candidate)) {
-            return $candidate
-        }
-    }
-
-    throw "No free private IPs were found in the 172.16.2.$StartHost-$EndHost range."
-}
-
 function Save-DeploymentManifest {
     param(
         [Parameter(Mandatory=$true)]
@@ -88,35 +48,40 @@ function Save-DeploymentManifest {
     $DeploymentData | ConvertTo-Json | Set-Content -Path $ManifestPath -Encoding UTF8
 }
 
-if ([string]::IsNullOrWhiteSpace($DeploymentId)) {
-    $DeploymentId = Get-Date -Format "yyyyMMddHHmmss"
+function Test-CloudFormationStackExists {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$StackName
+    )
+
+    $null = aws cloudformation describe-stacks --stack-name $StackName --region $Region --profile $Profile --output json 2>$null
+    return ($LASTEXITCODE -eq 0)
 }
 
 if ([string]::IsNullOrWhiteSpace($ApplicationName)) {
-    $ApplicationName = "kite-server-$DeploymentId"
-}
-
-if ([string]::IsNullOrWhiteSpace($ApplicationStackName)) {
-    $ApplicationStackName = "bytecatd-app-$DeploymentId"
+    $ApplicationName = $ApplicationStackName
 }
 
 $env:AWS_PROFILE = $Profile
 
 Push-Location $RepositoryRoot
 try {
-    Write-Host "AWS Bytecatd Parallel Application Deployment" -ForegroundColor Green
-    Write-Host "===========================================" -ForegroundColor Green
+    Write-Host "AWS Bytecatd Application Deployment" -ForegroundColor Green
+    Write-Host "==================================" -ForegroundColor Green
     Write-Host "Mode: $(if ($Deploy) { 'DEPLOY' } else { 'VALIDATE/DRY-RUN' })" -ForegroundColor $(if ($Deploy) { 'Red' } else { 'Yellow' })
     Write-Host "AWS Profile: $Profile" -ForegroundColor Yellow
     Write-Host "Region: $Region" -ForegroundColor Yellow
-    Write-Host "Deployment ID: $DeploymentId" -ForegroundColor Yellow
     Write-Host "Application Stack: $ApplicationStackName" -ForegroundColor Yellow
     Write-Host "Application Name: $ApplicationName" -ForegroundColor Yellow
+    if ($ApplicationStackName -eq "bytecatd-app") {
+        Write-Host "Deployment target: default stack (reruns update the same resources)" -ForegroundColor Yellow
+    } else {
+        Write-Host "Deployment target: custom stack name for a parallel deployment" -ForegroundColor Yellow
+    }
     Write-Host "Key Pair: $KeyPairName" -ForegroundColor Yellow
+    Write-Host "VPC ID: $VpcId" -ForegroundColor Yellow
     Write-Host "Private Instance Type: $PrivateInstanceType" -ForegroundColor Yellow
     Write-Host "Private Subnet ID: $PrivateSubnetId" -ForegroundColor Yellow
-    Write-Host "Private Security Group ID: $PrivateSecurityGroupId" -ForegroundColor Yellow
-    Write-Host "EFS Security Group ID: $EFSSecurityGroupId" -ForegroundColor Yellow
 
     try {
         $identity = aws sts get-caller-identity --profile $Profile --output json | ConvertFrom-Json
@@ -135,26 +100,18 @@ try {
     }
 
     try {
-        if ([string]::IsNullOrWhiteSpace($PrivateInstanceIP)) {
-            $PrivateInstanceIP = Get-NextAvailablePrivateIp -SubnetId $PrivateSubnetId
-            Write-Host "Auto-selected free private IP: $PrivateInstanceIP" -ForegroundColor Green
-        } else {
-            Write-Host "Using provided private IP: $PrivateInstanceIP" -ForegroundColor Yellow
-        }
+        aws ec2 describe-vpcs --vpc-ids $VpcId --region $Region --profile $Profile --output table | Out-Null
+        Write-Host "VPC '$VpcId' found" -ForegroundColor Green
     } catch {
-        Write-Error $_
+        Write-Error "VPC '$VpcId' not found in region $Region"
         exit 1
     }
 
     $manifest = @{
-        DeploymentId = $DeploymentId
         ApplicationStackName = $ApplicationStackName
         ApplicationName = $ApplicationName
         PrivateInstanceType = $PrivateInstanceType
-        PrivateInstanceIP = $PrivateInstanceIP
         PrivateSubnetId = $PrivateSubnetId
-        PrivateSecurityGroupId = $PrivateSecurityGroupId
-        EFSSecurityGroupId = $EFSSecurityGroupId
         VpcId = $VpcId
         Region = $Region
         Profile = $Profile
@@ -199,11 +156,14 @@ try {
         Write-Host "="*60 -ForegroundColor Yellow
 
         $changeSetName = "$ApplicationStackName-dryrun-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        $changeSetType = if (Test-CloudFormationStackExists -StackName $ApplicationStackName) { 'UPDATE' } else { 'CREATE' }
+        Write-Host "Change set type: $changeSetType" -ForegroundColor Yellow
 
         try {
             $changeSetArgs = @(
                 "cloudformation", "create-change-set",
                 "--change-set-name", $changeSetName,
+                "--change-set-type", $changeSetType,
                 "--stack-name", $ApplicationStackName,
                 "--template-body", "file://$TemplateFile",
                 "--region", $Region,
@@ -211,11 +171,9 @@ try {
                 "--capabilities", "CAPABILITY_NAMED_IAM",
                 "--parameters",
                 "ParameterKey=KeyPairName,ParameterValue=$KeyPairName",
+                "ParameterKey=VpcId,ParameterValue=$VpcId",
                 "ParameterKey=PrivateSubnetId,ParameterValue=$PrivateSubnetId",
-                "ParameterKey=PrivateSecurityGroupId,ParameterValue=$PrivateSecurityGroupId",
-                "ParameterKey=EFSSecurityGroupId,ParameterValue=$EFSSecurityGroupId",
                 "ParameterKey=PrivateInstanceType,ParameterValue=$PrivateInstanceType",
-                "ParameterKey=PrivateInstanceIP,ParameterValue=$PrivateInstanceIP",
                 "ParameterKey=ApplicationName,ParameterValue=$ApplicationName"
             )
 
@@ -223,13 +181,13 @@ try {
 
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "✓ Change set '$changeSetName' created successfully!" -ForegroundColor Green
-                Write-Host "This parallel deployment will use:" -ForegroundColor Cyan
-                Write-Host "  - Deployment ID: $DeploymentId" -ForegroundColor White
+                Write-Host "This deployment will use:" -ForegroundColor Cyan
+                Write-Host "  - Change Set Type: $changeSetType" -ForegroundColor White
                 Write-Host "  - Application Stack: $ApplicationStackName" -ForegroundColor White
                 Write-Host "  - Application Name: $ApplicationName" -ForegroundColor White
                 Write-Host "  - Instance Type: $PrivateInstanceType" -ForegroundColor White
-                Write-Host "  - Private IP: $PrivateInstanceIP" -ForegroundColor White
-                Write-Host "`nUse the same Deployment ID when running deploy\02_compute_deploy.ps1." -ForegroundColor Yellow
+                Write-Host "  - Private IP: template default from $TemplateFile" -ForegroundColor White
+                Write-Host "`nRun deploy\02_compute_deploy.ps1 next; it will pick up the application stack from the manifest." -ForegroundColor Yellow
             } else {
                 Write-Error "Failed to create change set"
                 exit 1
@@ -253,12 +211,11 @@ try {
                 "--capabilities", "CAPABILITY_NAMED_IAM",
                 "--parameter-overrides",
                 "KeyPairName=$KeyPairName",
+                "VpcId=$VpcId",
                 "PrivateSubnetId=$PrivateSubnetId",
-                "PrivateSecurityGroupId=$PrivateSecurityGroupId",
-                "EFSSecurityGroupId=$EFSSecurityGroupId",
                 "PrivateInstanceType=$PrivateInstanceType",
-                "PrivateInstanceIP=$PrivateInstanceIP",
                 "ApplicationName=$ApplicationName",
+                "--no-fail-on-empty-changeset",
                 "--output", "table"
             )
 
@@ -279,12 +236,12 @@ try {
                     Write-Warning "Could not retrieve application stack outputs"
                 }
 
-                Write-Host "`nParallel deployment details:" -ForegroundColor Yellow
-                Write-Host "1. Deployment ID: $DeploymentId" -ForegroundColor Cyan
-                Write-Host "2. Application Stack: $ApplicationStackName" -ForegroundColor Cyan
+                Write-Host "`nDeployment details:" -ForegroundColor Yellow
+                Write-Host "1. Application Stack: $ApplicationStackName" -ForegroundColor Cyan
+                Write-Host "2. Application Name: $ApplicationName" -ForegroundColor Cyan
                 Write-Host "3. Instance Type: $PrivateInstanceType" -ForegroundColor Cyan
-                Write-Host "4. Private IP: $PrivateInstanceIP" -ForegroundColor Cyan
-                Write-Host "5. Run deploy\02_compute_deploy.ps1 with -DeploymentId $DeploymentId to create matching compute resources." -ForegroundColor Cyan
+                Write-Host "4. Private IP: template default from $TemplateFile" -ForegroundColor Cyan
+                Write-Host "5. Run deploy\02_compute_deploy.ps1 to create matching compute resources for this app stack." -ForegroundColor Cyan
             } else {
                 Write-Error "Application stack deployment failed!"
                 exit 1

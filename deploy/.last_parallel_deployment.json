@@ -1,0 +1,10 @@
+{
+  "UpdatedAt": "2026-04-21T14:22:56.7350679+02:00",
+  "PrivateSubnetId": "subnet-0ca80cf221d8d832e",
+  "ApplicationStackName": "bytecatd-app",
+  "Region": "af-south-1",
+  "ApplicationName": "bytecatd-app",
+  "VpcId": "vpc-03d27a22badefc29f",
+  "Profile": "bytecatdev",
+  "PrivateInstanceType": "t3.large"
+}

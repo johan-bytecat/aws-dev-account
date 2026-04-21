@@ -1,22 +1,18 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Bytecatd Parallel Application Infrastructure - Kite Server with EFS and Data Storage'
+Description: 'Bytecatd Parallel Application Infrastructure - ByteCat Server with EFS and Data Storage'
 
 Parameters:
   KeyPairName:
     Type: AWS::EC2::KeyPair::KeyName
     Description: 'Name of an existing EC2 KeyPair to enable SSH access'
 
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: 'ID of the VPC that contains the application resources'
+
   PrivateSubnetId:
     Type: AWS::EC2::Subnet::Id
     Description: 'ID of the private subnet for the application instance and EFS mount target'
-
-  PrivateSecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
-    Description: 'ID of the security group assigned to the private application instance'
-
-  EFSSecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
-    Description: 'ID of the security group assigned to the EFS mount target'
 
   PrivateInstanceType:
     Type: String
@@ -25,14 +21,13 @@ Parameters:
 
   PrivateInstanceIP:
     Type: String
-    Default: '172.16.2.100'
+    Default: '172.16.2.120'
     Description: 'Fixed private IP address for private instance'
-    AllowedPattern: '^172\.16\.2\.[0-9]{1,3}$'
     ConstraintDescription: 'Must be a valid IP address in the private subnet range (172.16.2.0/24)'
 
   ApplicationName:
     Type: String
-    Default: 'kite-server'
+    Default: 'bytecatpoc'
     Description: 'Name of the application (used for resource naming)'
 
 Resources:
@@ -58,6 +53,83 @@ Resources:
           Value: !Ref ApplicationName
 
   # =============================================================================
+  # SECURITY GROUPS - Application instance and EFS access
+  # =============================================================================
+
+  PrivateInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security group for the private application instance'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '10.0.0.0/8'
+          Description: 'SSH from VPN/on-net clients'
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '10.0.0.0/8'
+          Description: 'HTTP from VPN/on-net clients'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '10.0.0.0/8'
+          Description: 'HTTPS from VPN/on-net clients'
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8999
+          CidrIp: '10.0.0.0/8'
+          Description: 'Application ports from VPN/on-net clients'
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '172.16.2.0/24'
+          Description: 'SSH from application subnet'
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '172.16.2.0/24'
+          Description: 'HTTP from application subnet'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '172.16.2.0/24'
+          Description: 'HTTPS from application subnet'
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8999
+          CidrIp: '172.16.2.0/24'
+          Description: 'Application ports from application subnet'
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: '0.0.0.0/0'
+          Description: 'All outbound traffic'
+      Tags:
+        - Key: Name
+          Value: !Sub 'Bytecatd-${ApplicationName}-Private-SG'
+        - Key: Application
+          Value: !Ref ApplicationName
+
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security group for the application EFS mount target'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref PrivateInstanceSecurityGroup
+          Description: 'NFS from the private application instance'
+      Tags:
+        - Key: Name
+          Value: !Sub 'Bytecatd-${ApplicationName}-EFS-SG'
+        - Key: Application
+          Value: !Ref ApplicationName
+
+  # =============================================================================
   # EFS FILE SYSTEM - Shared application storage
   # =============================================================================
 
@@ -79,7 +151,7 @@ Resources:
       FileSystemId: !Ref EFSFileSystem
       SubnetId: !Ref PrivateSubnetId
       SecurityGroups:
-        - !Ref EFSSecurityGroupId
+        - !Ref EFSSecurityGroup
 
   # =============================================================================
   # IAM ROLES FOR APPLICATION INSTANCE
@@ -88,7 +160,7 @@ Resources:
   PrivateInstanceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub 'Bytecatd-${ApplicationName}-Role-${AWS::StackName}'
+      RoleName: !Sub 'BcdApp-${AWS::StackName}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -117,6 +189,16 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:s3:::${DataBucket}/*'
                   - !Sub 'arn:aws:s3:::${DataBucket}'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - 'arn:aws:s3:::bytecat-support/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - 'arn:aws:s3:::bytecat-support'
         - PolicyName: !Sub 'Bytecatd-${ApplicationName}-EC2-Describe-Access'
           PolicyDocument:
             Version: '2012-10-17'
@@ -159,8 +241,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - iam:PassRole
-                Resource:
-                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/Bytecatd-${ApplicationName}-Role-${AWS::StackName}'
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/BcdApp-${AWS::StackName}'
                 Condition:
                   StringEquals:
                     iam:PassedToService:
@@ -204,7 +285,6 @@ Resources:
   AnthropicBedrockAccessManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-Anthropic-Access-${AWS::StackName}'
       Description: 'Anthropic Bedrock access via inference profiles and EU/US/ZA foundation models only'
       PolicyDocument:
         Version: '2012-10-17'
@@ -253,7 +333,6 @@ Resources:
   OpenAIGptOssBedrockAccessManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-OpenAI-GptOss-Access-${AWS::StackName}'
       Description: 'OpenAI GPT-OSS Bedrock access in EU and US regions only'
       PolicyDocument:
         Version: '2012-10-17'
@@ -286,7 +365,6 @@ Resources:
   MistralBedrockAccessManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-Mistral-Access-${AWS::StackName}'
       Description: 'Mistral Bedrock access in EU and US regions only, excluding APAC and GovCloud'
       PolicyDocument:
         Version: '2012-10-17'
@@ -312,7 +390,6 @@ Resources:
   DeepSeekBedrockAccessManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-DeepSeek-Access-${AWS::StackName}'
       Description: 'DeepSeek Bedrock access in supported EU and US regions only'
       PolicyDocument:
         Version: '2012-10-17'
@@ -334,7 +411,6 @@ Resources:
   NVIDIANemotronBedrockAccessManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub 'Bytecatd-${ApplicationName}-Bedrock-NVIDIA-Nemotron-Access-${AWS::StackName}'
       Description: 'NVIDIA Nemotron Bedrock access in supported EU and US regions only'
       PolicyDocument:
         Version: '2012-10-17'
@@ -357,7 +433,6 @@ Resources:
   PrivateInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
-      InstanceProfileName: !Sub 'Bytecatd-${ApplicationName}-Role-${AWS::StackName}'
       Roles:
         - !Ref PrivateInstanceRole
 
@@ -374,7 +449,7 @@ Resources:
       SubnetId: !Ref PrivateSubnetId
       PrivateIpAddress: !Ref PrivateInstanceIP
       SecurityGroupIds:
-        - !Ref PrivateSecurityGroupId
+        - !Ref PrivateInstanceSecurityGroup
       IamInstanceProfile: !Ref PrivateInstanceProfile
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
@@ -446,6 +521,18 @@ Resources:
           Value: !Ref ApplicationName
 
 Outputs:
+  PrivateSecurityGroupId:
+    Description: Private application instance security group ID
+    Value: !Ref PrivateInstanceSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-SG-ID'
+
+  EFSSecurityGroupId:
+    Description: EFS security group ID
+    Value: !Ref EFSSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-EFS-SG-ID'
+
   PrivateInstanceId:
     Description: Private Instance ID
     Value: !Ref PrivateInstance

@@ -1,18 +1,16 @@
 #!/usr/bin/env pwsh
 
-# AWS Bytecatd Parallel Compute Deployment Script
-# Deploys a parallel-safe compute stack that targets the matching parallel application stack.
-# Defaults to validation mode. Use -Deploy to actually deploy.
+# AWS Bytecatd Compute Deployment Script
+# Defaults to stable stack names so reruns update the same resources.
+# Pass different stack names when you intentionally want a parallel deployment.
+# Defaults to validation/dry-run mode. Use -Deploy to actually deploy.
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$ApplicationStackName = "",
+    [string]$ApplicationStackName = "bytecatd-app",
 
     [Parameter(Mandatory=$false)]
-    [string]$DeploymentId = "",
-
-    [Parameter(Mandatory=$false)]
-    [string]$ComputeStackName = "",
+    [string]$ComputeStackName = "bytecatd-compute",
 
     [Parameter(Mandatory=$false)]
     [string]$VpcId = "",
@@ -53,7 +51,7 @@ function Save-DeploymentManifest {
     $DeploymentData | ConvertTo-Json | Set-Content -Path $ManifestPath -Encoding UTF8
 }
 
-function Remove-BadStackState {
+function Remove-StackInBadState {
     param(
         [string]$StackName,
         [string]$StackStatus
@@ -82,44 +80,23 @@ function Remove-BadStackState {
 }
 
 $manifest = Get-LastParallelDeployment
-if (-not [string]::IsNullOrWhiteSpace($DeploymentId)) {
-    if ([string]::IsNullOrWhiteSpace($ApplicationStackName)) {
-        $ApplicationStackName = "bytecatd-app-$DeploymentId"
-    }
-
-    if ([string]::IsNullOrWhiteSpace($ComputeStackName)) {
-        $ComputeStackName = "bytecatd-compute-$DeploymentId"
-    }
-} elseif ($manifest) {
-    if ([string]::IsNullOrWhiteSpace($ApplicationStackName)) {
+if ($manifest) {
+    if (-not $PSBoundParameters.ContainsKey('ApplicationStackName') -and -not [string]::IsNullOrWhiteSpace([string]$manifest.ApplicationStackName)) {
         $ApplicationStackName = [string]$manifest.ApplicationStackName
     }
 
-    if ([string]::IsNullOrWhiteSpace($ComputeStackName) -and -not [string]::IsNullOrWhiteSpace([string]$manifest.DeploymentId)) {
-        $ComputeStackName = "bytecatd-compute-$($manifest.DeploymentId)"
+    if (-not $PSBoundParameters.ContainsKey('ComputeStackName') -and -not [string]::IsNullOrWhiteSpace([string]$manifest.ComputeStackName)) {
+        $ComputeStackName = [string]$manifest.ComputeStackName
     }
 
-    if ([string]::IsNullOrWhiteSpace($DeploymentId)) {
-        $DeploymentId = [string]$manifest.DeploymentId
-    }
-
-    if ([string]::IsNullOrWhiteSpace($VpcId) -and $manifest.PSObject.Properties.Name -contains 'VpcId') {
+    if (-not $PSBoundParameters.ContainsKey('VpcId') -and $manifest.PSObject.Properties.Name -contains 'VpcId') {
         $VpcId = [string]$manifest.VpcId
     }
-
 }
 
 if ([string]::IsNullOrWhiteSpace($ApplicationStackName)) {
-    Write-Error "ApplicationStackName is required. Run deploy\01_app_deploy.ps1 first or supply -DeploymentId / -ApplicationStackName explicitly."
+    Write-Error "ApplicationStackName is required. Run deploy\01_app_deploy.ps1 first or supply -ApplicationStackName explicitly."
     exit 1
-}
-
-if ([string]::IsNullOrWhiteSpace($ComputeStackName)) {
-    if ($ApplicationStackName -like "bytecatd-app-*") {
-        $ComputeStackName = $ApplicationStackName -replace "^bytecatd-app-", "bytecatd-compute-"
-    } else {
-        $ComputeStackName = "$ApplicationStackName-compute"
-    }
 }
 
 if ([string]::IsNullOrWhiteSpace($VpcId)) {
@@ -131,14 +108,18 @@ $env:AWS_PROFILE = $Profile
 
 Push-Location $RepositoryRoot
 try {
-    Write-Host "AWS Bytecatd Parallel Compute Deployment" -ForegroundColor Green
-    Write-Host "=======================================" -ForegroundColor Green
-    Write-Host "Mode: $(if ($Deploy) { 'DEPLOY' } else { 'VALIDATE ONLY' })" -ForegroundColor $(if ($Deploy) { 'Red' } else { 'Yellow' })
+    Write-Host "AWS Bytecatd Compute Deployment" -ForegroundColor Green
+    Write-Host "==============================" -ForegroundColor Green
+    Write-Host "Mode: $(if ($Deploy) { 'DEPLOY' } else { 'VALIDATE/DRY-RUN' })" -ForegroundColor $(if ($Deploy) { 'Red' } else { 'Yellow' })
     Write-Host "AWS Profile: $Profile" -ForegroundColor Yellow
     Write-Host "Region: $Region" -ForegroundColor Yellow
-    Write-Host "Deployment ID: $(if ([string]::IsNullOrWhiteSpace($DeploymentId)) { 'manual' } else { $DeploymentId })" -ForegroundColor Yellow
     Write-Host "Application Stack: $ApplicationStackName" -ForegroundColor Yellow
     Write-Host "Compute Stack: $ComputeStackName" -ForegroundColor Yellow
+    if ($ApplicationStackName -eq "bytecatd-app" -and $ComputeStackName -eq "bytecatd-compute") {
+        Write-Host "Deployment target: default stacks (reruns update the same resources)" -ForegroundColor Yellow
+    } else {
+        Write-Host "Deployment target: custom stack name(s) for a parallel deployment" -ForegroundColor Yellow
+    }
     Write-Host "VPC ID: $VpcId" -ForegroundColor Yellow
 
     try {
@@ -173,7 +154,7 @@ try {
             $computeStackStatus = $existingStack.Stacks[0].StackStatus
             Write-Host "Existing compute stack found with status: $computeStackStatus" -ForegroundColor Yellow
 
-            if (-not (Remove-BadStackState -StackName $ComputeStackName -StackStatus $computeStackStatus)) {
+            if (-not (Remove-StackInBadState -StackName $ComputeStackName -StackStatus $computeStackStatus)) {
                 exit 1
             }
 
@@ -191,7 +172,6 @@ try {
     }
 
     $updatedManifest = @{
-        DeploymentId = $DeploymentId
         ApplicationStackName = $ApplicationStackName
         ComputeStackName = $ComputeStackName
         VpcId = $VpcId
@@ -219,7 +199,7 @@ try {
     Write-Host "Deployment manifest saved to: $ManifestPath" -ForegroundColor DarkGray
 
     if (-not $Deploy) {
-        Write-Host "Press Enter to continue with validation or Ctrl+C to cancel..." -ForegroundColor Yellow
+        Write-Host "Press Enter to continue with validation/dry-run or Ctrl+C to cancel..." -ForegroundColor Yellow
     } else {
         Write-Host "Press Enter to continue with DEPLOYMENT or Ctrl+C to cancel..." -ForegroundColor Red
     }
@@ -250,12 +230,11 @@ try {
 
     if (-not $Deploy) {
         Write-Host "`n" + "="*60 -ForegroundColor Yellow
-        Write-Host "VALIDATION COMPLETE - PARALLEL DRY RUN SUMMARY" -ForegroundColor Yellow
+        Write-Host "VALIDATION COMPLETE - COMPUTE DRY-RUN SUMMARY" -ForegroundColor Yellow
         Write-Host "="*60 -ForegroundColor Yellow
 
         Write-Host "`nTemplate is valid and ready for deployment." -ForegroundColor Green
-        Write-Host "`nParallel deployment pairing:" -ForegroundColor Cyan
-        Write-Host "  - Deployment ID: $(if ([string]::IsNullOrWhiteSpace($DeploymentId)) { 'manual' } else { $DeploymentId })" -ForegroundColor White
+        Write-Host "`nDeployment targets:" -ForegroundColor Cyan
         Write-Host "  - Application Stack: $ApplicationStackName" -ForegroundColor White
         Write-Host "  - Compute Stack: $ComputeStackName" -ForegroundColor White
 
@@ -302,7 +281,11 @@ try {
                     Write-Warning "Could not retrieve compute stack outputs"
                 }
 
-                Write-Host "`nParallel compute deployment complete for application stack '$ApplicationStackName'." -ForegroundColor Yellow
+                Write-Host "`nDeployment details:" -ForegroundColor Yellow
+                Write-Host "1. Application Stack: $ApplicationStackName" -ForegroundColor Cyan
+                Write-Host "2. Compute Stack: $ComputeStackName" -ForegroundColor Cyan
+                Write-Host "3. VPC ID: $VpcId" -ForegroundColor Cyan
+                Write-Host "4. Re-run deploy\02_compute_deploy.ps1 to update this compute stack." -ForegroundColor Cyan
             } else {
                 Write-Error "Compute stack deployment failed!"
 
@@ -316,7 +299,7 @@ try {
                 $cleanupStack = aws cloudformation describe-stacks --stack-name $ComputeStackName --region $Region --profile $Profile --output json 2>$null | ConvertFrom-Json
                 if ($cleanupStack -and $cleanupStack.Stacks.Count -gt 0) {
                     $cleanupStatus = $cleanupStack.Stacks[0].StackStatus
-                    Remove-BadStackState -StackName $ComputeStackName -StackStatus $cleanupStatus | Out-Null
+                    Remove-StackInBadState -StackName $ComputeStackName -StackStatus $cleanupStatus | Out-Null
                 }
 
                 exit 1
